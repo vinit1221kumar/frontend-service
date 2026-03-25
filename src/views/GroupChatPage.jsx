@@ -81,7 +81,7 @@ export default function GroupChatPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45, ease: [0.2, 0.9, 0.2, 1] }}
       >
-        <div className="mb-3 flex shrink-0 items-start justify-between gap-3 rounded-2xl border border-amber-200/70 bg-gradient-to-r from-amber-100/80 to-yellow-50/60 px-3 py-2.5 dark:border-navy-700/40 dark:from-navy-900/40 dark:to-navy-950/50 sm:px-4 sm:py-3">
+        <div className="anim-fade-up mb-3 flex shrink-0 items-start justify-between gap-3 rounded-2xl border border-amber-200/70 bg-gradient-to-r from-amber-100/80 to-yellow-50/60 px-3 py-2.5 dark:border-navy-700/40 dark:from-navy-900/40 dark:to-navy-950/50 sm:px-4 sm:py-3">
           <div className="min-w-0 flex-1">
             <div className="badge mb-1 inline-block">Group chat</div>
             <p className="text-xs text-amber-900/90 dark:text-slate-100/90 sm:text-sm">
@@ -95,7 +95,7 @@ export default function GroupChatPage() {
         </div>
 
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)] lg:grid-rows-1 lg:items-stretch lg:gap-5">
-        <aside className="card flex max-h-[38vh] min-h-0 flex-col overflow-visible p-0 lg:max-h-none">
+        <aside className="card anim-fade-up flex max-h-[38vh] min-h-0 flex-col overflow-visible p-0 [animation-delay:70ms] lg:max-h-none">
           <div
             ref={groupSearchWrapRef}
             className="relative shrink-0 border-b border-amber-200/60 bg-amber-50/50 dark:border-navy-700/40 dark:bg-navy-950/50"
@@ -118,7 +118,7 @@ export default function GroupChatPage() {
               </Button>
             </div>
             {groupSearchOpen && (
-              <div className="absolute left-4 right-4 top-full z-[60] mt-2 overflow-hidden rounded-2xl border border-amber-200/90 bg-white p-3 shadow-xl dark:border-navy-700/60 dark:bg-navy-950">
+              <div className="anim-pop absolute left-4 right-4 top-full z-[60] mt-2 overflow-hidden rounded-2xl border border-amber-200/90 bg-white p-3 shadow-xl dark:border-navy-700/60 dark:bg-navy-950">
                 <label className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-sky-400">
                   Group ID
                 </label>
@@ -145,7 +145,7 @@ export default function GroupChatPage() {
           </div>
         </aside>
 
-        <section className="card flex min-h-0 flex-1 flex-col overflow-hidden">
+        <section className="card anim-fade-up flex min-h-0 flex-1 flex-col overflow-hidden [animation-delay:130ms]">
           <div className="shrink-0 border-b border-amber-200/60 px-4 py-3 dark:border-navy-700/40">
             <div className="flex items-center gap-2">
               <MessageSquare className="h-4 w-4 shrink-0 text-amber-600 dark:text-sky-400" />
@@ -158,13 +158,16 @@ export default function GroupChatPage() {
 
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain bg-amber-50/20 px-4 py-4 dark:bg-navy-900/25">
             {messages.map((m, idx) => (
-              <div
+              <motion.div
                 key={m._id || idx}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.2 }}
                 className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
               >
                 <div className="text-xs text-slate-500 dark:text-slate-400">{m.senderId}</div>
                 <div className="mt-1 text-slate-900 dark:text-slate-100">{m.message}</div>
-              </div>
+              </motion.div>
             ))}
             {messages.length === 0 && (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-300">

@@ -193,7 +193,7 @@ export default function ChatDashboardPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45, ease: [0.2, 0.9, 0.2, 1] }}
       >
-        <div className="mb-3 flex shrink-0 items-start gap-2 rounded-2xl border border-amber-200/70 bg-gradient-to-r from-amber-100/80 to-yellow-50/60 px-3 py-2.5 dark:border-navy-700/40 dark:from-navy-900/40 dark:to-navy-950/50 sm:px-4 sm:py-3">
+        <div className="anim-fade-up mb-3 flex shrink-0 items-start gap-2 rounded-2xl border border-amber-200/70 bg-gradient-to-r from-amber-100/80 to-yellow-50/60 px-3 py-2.5 dark:border-navy-700/40 dark:from-navy-900/40 dark:to-navy-950/50 sm:px-4 sm:py-3">
           <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-sky-400 sm:h-5 sm:w-5" />
           <p className="text-xs leading-relaxed text-amber-900/90 dark:text-slate-100/90 sm:text-sm">
             <span className="font-semibold">Direct messages</span> — tap the search icon in Chats, find someone by{' '}
@@ -203,7 +203,7 @@ export default function ChatDashboardPage() {
 
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)] lg:grid-rows-1 lg:items-stretch lg:gap-5">
           {/* Sidebar */}
-          <aside className="card flex max-h-[38vh] min-h-0 flex-col overflow-visible p-0 lg:max-h-none lg:min-h-0">
+          <aside className="card anim-fade-up flex max-h-[38vh] min-h-0 flex-col overflow-visible p-0 [animation-delay:70ms] lg:max-h-none lg:min-h-0">
             <div
               ref={searchWrapRef}
               className="relative shrink-0 border-b border-amber-200/60 bg-amber-50/50 dark:border-navy-700/40 dark:bg-navy-950/50"
@@ -227,7 +227,7 @@ export default function ChatDashboardPage() {
               </div>
 
               {searchOpen && (
-                <div className="absolute left-4 right-4 top-full z-[60] mt-2 overflow-hidden rounded-2xl border border-amber-200/90 bg-white shadow-xl dark:border-navy-700/60 dark:bg-navy-950">
+                <div className="anim-pop absolute left-4 right-4 top-full z-[60] mt-2 overflow-hidden rounded-2xl border border-amber-200/90 bg-white shadow-xl dark:border-navy-700/60 dark:bg-navy-950">
                     <div className="border-b border-amber-100 p-2 dark:border-navy-700/50">
                       <input
                         ref={searchInputRef}
@@ -312,7 +312,7 @@ export default function ChatDashboardPage() {
           </aside>
 
           {/* Chat panel — fills remaining viewport */}
-          <section className="card flex min-h-0 flex-1 flex-col overflow-hidden p-0 lg:min-h-0">
+          <section className="card anim-fade-up flex min-h-0 flex-1 flex-col overflow-hidden p-0 [animation-delay:130ms] lg:min-h-0">
             <div className="flex flex-col gap-3 border-b border-amber-200/60 bg-gradient-to-r from-white/90 to-amber-50/30 px-4 py-3 dark:border-navy-700/40 dark:from-navy-950/80 dark:to-navy-950/50 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 flex-1 items-center gap-3">
                 {activeUserId.trim() ? (

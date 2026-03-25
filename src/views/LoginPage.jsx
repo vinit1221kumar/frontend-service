@@ -107,12 +107,12 @@ export default function LoginPage() {
         <AppHeaderMenu showLogout={false} menuLinks={[]} />
       </div>
       <motion.div
-        className="card relative z-10 w-full max-w-md p-7 shadow-2xl backdrop-blur-sm"
+        className="card anim-fade-up relative z-10 w-full max-w-md p-7 shadow-2xl backdrop-blur-sm"
         initial={{ opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.55, ease: [0.2, 0.9, 0.2, 1] }}
       >
-        <div className="mb-6">
+        <div className="anim-fade-up mb-6 [animation-delay:70ms]">
           <AuthCardBranding />
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">Welcome back</h1>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
@@ -123,7 +123,7 @@ export default function LoginPage() {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-3">
+        <form onSubmit={handleSubmit} className="anim-fade-up space-y-3 [animation-delay:120ms]">
           <input
             className="input"
             placeholder="Email (e.g. you@example.com)"
@@ -167,12 +167,12 @@ export default function LoginPage() {
         </form>
 
         {error && (
-          <div className="mt-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-800 dark:border-red-500/30 dark:text-red-200">
+          <div className="anim-pop mt-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-800 dark:border-red-500/30 dark:text-red-200">
             {error}
           </div>
         )}
 
-        <p className="mt-5 text-sm text-slate-600 dark:text-slate-300">
+        <p className="anim-fade-up mt-5 text-sm text-slate-600 [animation-delay:160ms] dark:text-slate-300">
           No account? <Link href="/register">Register</Link>
         </p>
       </motion.div>

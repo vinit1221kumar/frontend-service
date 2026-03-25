@@ -56,14 +56,14 @@ export function AppHeaderMenu({ showHomeButton = true, menuLinks = [], showLogou
           {menuOpen && (
             <div
               role="menu"
-              className="absolute right-0 top-full z-50 mt-1.5 min-w-[200px] overflow-hidden rounded-2xl border border-amber-200/90 bg-white py-1.5 shadow-xl shadow-amber-900/10 dark:border-navy-700/60 dark:bg-navy-950 dark:shadow-black/40"
+              className="anim-pop absolute right-0 top-full z-50 mt-1.5 min-w-[200px] overflow-hidden rounded-2xl border border-amber-200/90 bg-white py-1.5 shadow-xl shadow-amber-900/10 dark:border-navy-700/60 dark:bg-navy-950 dark:shadow-black/40"
             >
               {menuLinks.map(({ href, label, icon: Icon }) => (
                 <Link
                   key={href + label}
                   href={href}
                   role="menuitem"
-                  className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-amber-950 no-underline hover:bg-amber-100 dark:text-slate-50 dark:hover:bg-navy-800/60"
+                  className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-amber-950 no-underline transition-colors duration-150 hover:bg-amber-100 dark:text-slate-50 dark:hover:bg-navy-800/60"
                   onClick={() => setMenuOpen(false)}
                 >
                   {Icon && <Icon className="h-4 w-4 shrink-0 opacity-80" />}
@@ -74,7 +74,7 @@ export function AppHeaderMenu({ showHomeButton = true, menuLinks = [], showLogou
                 <button
                   type="button"
                   role="menuitem"
-                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/50"
+                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-700 transition-colors duration-150 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/50"
                   onClick={() => {
                     setMenuOpen(false);
                     logout();

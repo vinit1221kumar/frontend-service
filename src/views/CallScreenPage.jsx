@@ -42,8 +42,13 @@ export default function CallScreenPage() {
     <div className="app-shell flex h-[100dvh] min-h-0 flex-col overflow-hidden">
       <AppMainHeader />
 
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-4 sm:px-5">
-        <div className="mb-4 flex shrink-0 items-start justify-between gap-3 rounded-2xl border border-amber-200/70 bg-gradient-to-r from-amber-100/80 to-yellow-50/60 px-3 py-2.5 dark:border-navy-700/40 dark:from-navy-900/40 dark:to-navy-950/50 sm:px-4 sm:py-3">
+      <motion.main
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-4 sm:px-5"
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.45, ease: [0.2, 0.9, 0.2, 1] }}
+      >
+        <div className="anim-fade-up mb-4 flex shrink-0 items-start justify-between gap-3 rounded-2xl border border-amber-200/70 bg-gradient-to-r from-amber-100/80 to-yellow-50/60 px-3 py-2.5 dark:border-navy-700/40 dark:from-navy-900/40 dark:to-navy-950/50 sm:px-4 sm:py-3">
           <div className="flex min-w-0 flex-1 gap-2">
             <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-sky-400 sm:h-5 sm:w-5" />
             <div className="min-w-0">
@@ -59,7 +64,7 @@ export default function CallScreenPage() {
         </div>
 
         <motion.div
-          className="card mx-auto w-full max-w-lg p-6 sm:my-auto sm:p-7"
+          className="card anim-fade-up mx-auto w-full max-w-lg p-6 [animation-delay:70ms] sm:my-auto sm:p-7"
           initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.55, ease: [0.2, 0.9, 0.2, 1] }}
@@ -86,13 +91,13 @@ export default function CallScreenPage() {
           {(callId || status) && (
             <div className="mt-5 space-y-2">
               {callId && (
-                <div className="rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 text-sm dark:border-navy-700/50 dark:bg-navy-950/50">
+                <div className="anim-fade-up rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 text-sm [animation-delay:120ms] dark:border-navy-700/50 dark:bg-navy-950/50">
                   <div className="text-xs text-amber-700 dark:text-sky-400">Call ID</div>
                   <div className="mt-1 font-mono text-amber-950 dark:text-slate-50">{callId}</div>
                 </div>
               )}
               {status && (
-                <div className="text-sm text-amber-800 dark:text-slate-200">Status: {status}</div>
+                <div className="anim-fade-up text-sm text-amber-800 [animation-delay:140ms] dark:text-slate-200">Status: {status}</div>
               )}
 
               <Button variant="secondary" onClick={endCall} disabled={!callId}>
@@ -102,7 +107,7 @@ export default function CallScreenPage() {
             </div>
           )}
         </motion.div>
-      </main>
+      </motion.main>
     </div>
   );
 }

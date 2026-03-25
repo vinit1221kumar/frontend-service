@@ -108,7 +108,7 @@ export default function VideoCallPage() {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
       >
-        <div className="flex shrink-0 items-start justify-between gap-3 rounded-2xl border border-amber-200/70 bg-gradient-to-r from-amber-100/80 to-yellow-50/60 px-3 py-2.5 dark:border-navy-700/40 dark:from-navy-900/40 dark:to-navy-950/50 sm:px-4 sm:py-3">
+        <div className="anim-fade-up flex shrink-0 items-start justify-between gap-3 rounded-2xl border border-amber-200/70 bg-gradient-to-r from-amber-100/80 to-yellow-50/60 px-3 py-2.5 dark:border-navy-700/40 dark:from-navy-900/40 dark:to-navy-950/50 sm:px-4 sm:py-3">
           <div className="flex min-w-0 flex-1 gap-2">
             <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-sky-400 sm:h-5 sm:w-5" />
             <div className="min-w-0">
@@ -125,7 +125,7 @@ export default function VideoCallPage() {
           </div>
         </div>
 
-        <div className="card flex shrink-0 flex-col gap-3 p-3 sm:flex-row sm:items-end sm:p-4">
+        <div className="card anim-fade-up flex shrink-0 flex-col gap-3 p-3 [animation-delay:70ms] sm:flex-row sm:items-end sm:p-4">
           <div className="min-w-0 flex-1">
             <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">
               Room ID
@@ -161,12 +161,12 @@ export default function VideoCallPage() {
         </div>
 
         {error && (
-          <div className="shrink-0 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-800 dark:text-red-200">
+          <div className="anim-fade-up shrink-0 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-800 [animation-delay:90ms] dark:text-red-200">
             {error}
           </div>
         )}
 
-        <div className="shrink-0 rounded-xl border border-amber-200/70 bg-amber-50/80 px-4 py-2 text-sm text-amber-900 dark:border-navy-700/50 dark:bg-navy-950/60 dark:text-slate-200/90">
+        <div className="anim-fade-up shrink-0 rounded-xl border border-amber-200/70 bg-amber-50/80 px-4 py-2 text-sm text-amber-900 [animation-delay:110ms] dark:border-navy-700/50 dark:bg-navy-950/60 dark:text-slate-200/90">
           Status:{' '}
           <span className="font-medium text-amber-950 dark:text-slate-50">
             {status === 'idle' && 'Ready'}
@@ -179,7 +179,7 @@ export default function VideoCallPage() {
           </span>
         </div>
 
-        <div className="relative min-h-0 w-full flex-1 overflow-hidden rounded-2xl border border-amber-200/60 bg-slate-900 shadow-xl dark:border-navy-800/40">
+        <div className="anim-fade-up relative min-h-0 w-full flex-1 overflow-hidden rounded-2xl border border-amber-200/60 bg-slate-900 shadow-xl [animation-delay:140ms] dark:border-navy-800/40">
           <video
             ref={remoteVideoRef}
             autoPlay
@@ -201,7 +201,7 @@ export default function VideoCallPage() {
         </div>
 
         {inCall && (
-          <div className="flex shrink-0 flex-wrap justify-center gap-2 pb-1">
+          <div className="anim-fade-up flex shrink-0 flex-wrap justify-center gap-2 pb-1 [animation-delay:170ms]">
             <Button type="button" variant="secondary" onClick={toggleMic}>
               {micOn ? <Mic className="mr-2 h-4 w-4" /> : <MicOff className="mr-2 h-4 w-4" />}
               {micOn ? 'Mute' : 'Unmute'}

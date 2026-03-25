@@ -55,11 +55,13 @@
 
   .card {
     @apply rounded-2xl border border-amber-200/80 bg-white/90 shadow-lg shadow-amber-200/40 backdrop-blur-xl;
+    @apply transition-[transform,box-shadow,border-color,background-color] duration-200 ease-out motion-safe:hover:-translate-y-0.5;
     @apply dark:border-navy-700/50 dark:bg-navy-950/85 dark:shadow-[0_24px_80px_-40px_rgba(0,0,0,0.65)] dark:shadow-black/50;
   }
 
   .input {
     @apply w-full rounded-xl border border-amber-200/90 bg-amber-50/50 px-4 py-3 text-amber-950 placeholder:text-amber-600/60 outline-none ring-0 transition;
+    @apply duration-200 ease-out motion-safe:focus:-translate-y-px;
     @apply focus:border-amber-500 focus:bg-white focus:shadow-[0_0_0_4px_rgba(245,158,11,0.22)];
     @apply dark:border-navy-600/60 dark:bg-navy-900/50 dark:text-slate-50 dark:placeholder:text-slate-400/80;
     @apply dark:focus:border-sky-500 dark:focus:bg-navy-900/90 dark:focus:shadow-[0_0_0_4px_rgba(56,189,248,0.2)];
@@ -135,6 +137,17 @@
     }
   }
 
+  @keyframes pop-in {
+    0% {
+      opacity: 0;
+      transform: translateY(6px) scale(0.98);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
   .anim-float {
     animation: floaty 6s ease-in-out infinite;
     will-change: transform;
@@ -160,10 +173,16 @@
     pointer-events: none;
   }
 
+  .anim-pop {
+    animation: pop-in 190ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+    will-change: transform, opacity;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .anim-float,
     .anim-fade-up,
     .anim-glow,
+    .anim-pop,
     .anim-shimmer::after {
       animation: none !important;
       transform: none !important;
