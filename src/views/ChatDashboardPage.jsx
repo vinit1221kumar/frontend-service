@@ -14,7 +14,6 @@ import {
   deleteRecentDirectChat,
   markRecentDirectChatRead,
   searchUsersByUsername,
-  sendDirectMedia,
   sendDirectMessage,
   setRecentDirectChatArchived,
   setRecentDirectChatLocked,
@@ -703,21 +702,13 @@ export default function ChatDashboardPage() {
                 {activeUserId.trim() && user?.id ? (
                   <>
                     <Button asChild size="sm" variant="secondary">
-<<<<<<< HEAD
                       <Link href="/call">
-=======
-                      <Link href={`/call?callee=${encodeURIComponent(activeUserId.trim())}&calleeName=${encodeURIComponent(peerUsername || '')}&mode=audio`}>
->>>>>>> a5e9db6 (vvv)
                         <Phone className="mr-1.5 h-4 w-4" />
                         Voice
                       </Link>
                     </Button>
                     <Button asChild size="sm" variant="secondary">
-<<<<<<< HEAD
                       <Link href="/video-call">
-=======
-                      <Link href={`/call?callee=${encodeURIComponent(activeUserId.trim())}&calleeName=${encodeURIComponent(peerUsername || '')}&mode=video`}>
->>>>>>> a5e9db6 (vvv)
                         <Video className="mr-1.5 h-4 w-4" />
                         Video
                       </Link>
