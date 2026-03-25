@@ -373,6 +373,57 @@ export async function deleteDirectMessage({ userId, peerId, messageId }) {
   await remove(messageRef);
 }
 
+export async function editDirectMessage({ userId, peerId, messageId, newContent }) {
+  if (!userId || !peerId || !messageId) {
+    throw new Error('Missing edit message parameters.');
+  }
+  const content = String(newContent || '').trim();
+  if (!content) {
+    throw new Error('Message content is required.');
+  }
+
+  const realtimeDb = getRealtimeDb();
+  const threadId = directThreadId(userId, peerId);
+  const messageRef = ref(realtimeDb, `dmMessages/${threadId}/${messageId}`);
+  const snap = await get(messageRef);
+  if (!snap.exists()) return;
+
+  const value = snap.val() || {};
+  if (value.senderId !== userId) {
+    throw new Error('You can only edit your own messages.');
+  }
+
+  const createdAt = Number(value.createdAt || 0);
+  const now = Date.now();
+  const EDIT_WINDOW_MS = 15 * 60 * 1000;
+  if (createdAt && now - createdAt > EDIT_WINDOW_MS) {
+    throw new Error('Edit window expired (15 minutes).');
+  }
+
+  await update(messageRef, {
+    content,
+    updatedAt: now
+  });
+
+  // Keep recent chats preview in sync (without touching unreadCount).
+  try {
+    await Promise.all([
+      update(ref(realtimeDb), {
+        [`recentDirectChats/${userId}/${threadId}/lastMessage`]: content,
+        [`recentDirectChats/${userId}/${threadId}/lastSenderId`]: userId,
+        [`recentDirectChats/${userId}/${threadId}/updatedAt`]: now
+      }),
+      update(ref(realtimeDb), {
+        [`recentDirectChats/${peerId}/${threadId}/lastMessage`]: content,
+        [`recentDirectChats/${peerId}/${threadId}/lastSenderId`]: userId,
+        [`recentDirectChats/${peerId}/${threadId}/updatedAt`]: now
+      })
+    ]);
+  } catch {
+    /* ignore recent index failures to avoid blocking edits */
+  }
+}
+
 export async function listGroupMessages(groupId) {
   const realtimeDb = getRealtimeDb();
   const groupRef = query(ref(realtimeDb, `groupMessages/${groupId}`), limitToLast(150));

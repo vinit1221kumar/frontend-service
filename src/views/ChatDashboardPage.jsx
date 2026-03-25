@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '../hooks/useAuth';
 import {
   deleteDirectMessage,
+  editDirectMessage,
   listDirectMessages,
   markRecentDirectChatRead,
   searchUsersByUsername,
@@ -21,6 +22,8 @@ import {
   Loader2,
   MessageCircle,
   Phone,
+  MoreVertical,
+  Pencil,
   Search,
   Send,
   Sparkles,
@@ -54,8 +57,20 @@ export default function ChatDashboardPage() {
   const [peerPresence, setPeerPresence] = useState(null);
   const [peerPresenceLoading, setPeerPresenceLoading] = useState(false);
   const [peerAvatarFailed, setPeerAvatarFailed] = useState(false);
+  const [openMessageMenuId, setOpenMessageMenuId] = useState(null);
+  const EDIT_WINDOW_MS = 15 * 60 * 1000;
   const searchWrapRef = useRef(null);
   const searchInputRef = useRef(null);
+
+  useEffect(() => {
+    const onDoc = (e) => {
+      const target = e.target;
+      if (target?.closest?.('[data-message-menu]')) return;
+      setOpenMessageMenuId(null);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
 
   useEffect(() => {
     if (!searchOpen) return;
@@ -216,6 +231,55 @@ export default function ChatDashboardPage() {
       setActionError('Could not send message. Please try again.');
     } finally {
       setSendingMessage(false);
+    }
+  };
+
+  const sendQuickMessage = async (content) => {
+    if (!user?.id || !activeUserId?.trim()) return;
+    const text = String(content || '').trim();
+    if (!text) return;
+    setSendingMessage(true);
+    setActionError('');
+    try {
+      await sendDirectMessage({
+        senderId: user.id,
+        receiverId: activeUserId.trim(),
+        content: text
+      });
+      setInput('');
+    } catch {
+      setActionError('Could not send message. Please try again.');
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
+  const handleEditMessage = async (message) => {
+    if (!user?.id || !activeUserId?.trim() || !message?._id) return;
+    const createdAt = Number(message.createdAt || 0);
+    const canAccess = createdAt && Date.now() - createdAt <= EDIT_WINDOW_MS;
+    if (!canAccess) {
+      setActionError('Edit window expired (15 minutes).');
+      return;
+    }
+
+    const next = window.prompt('Edit message', message.content || '');
+    if (next === null) return; // cancelled
+    const newContent = next.trim();
+    if (!newContent) return;
+
+    setActionError('');
+    try {
+      await editDirectMessage({
+        userId: user.id,
+        peerId: activeUserId.trim(),
+        messageId: message._id,
+        newContent
+      });
+      setMessages((prev) => prev.map((m) => (m._id === message._id ? { ...m, content: newContent } : m)));
+      setOpenMessageMenuId(null);
+    } catch (err) {
+      setActionError(err?.message || 'Could not edit message. Please try again.');
     }
   };
 
@@ -535,6 +599,8 @@ export default function ChatDashboardPage() {
 
               {messages.map((m, idx) => {
                 const mine = m.senderId === user?.id;
+                const createdAt = Number(m.createdAt || 0);
+                const canEditDelete = createdAt && Date.now() - createdAt <= EDIT_WINDOW_MS;
                 const peerLabel = activeUserId.trim() ? peerUsername || peerShort : 'Peer';
                 const senderLabel = mine ? user?.username || 'You' : peerLabel;
                 return (
@@ -563,16 +629,52 @@ export default function ChatDashboardPage() {
                           {senderLabel}
                         </div>
                         {mine && (
-                          <button
-                            type="button"
-                            className="rounded-md px-2 py-1 text-[11px] font-semibold text-amber-50 transition hover:bg-white/20 hover:text-white"
-                            onClick={() => handleDeleteMessage(m._id)}
-                            disabled={deletingMessageId === m._id}
-                            aria-label="Delete message"
-                            title="Delete message"
-                          >
-                            {deletingMessageId === m._id ? 'Deleting…' : 'Delete'}
-                          </button>
+                          <div className="relative" data-message-menu>
+                            <button
+                              type="button"
+                              className="rounded-md p-1.5 text-[11px] font-semibold text-amber-50 transition hover:bg-white/15 hover:text-white"
+                              onClick={() => setOpenMessageMenuId((prev) => (prev === m._id ? null : m._id))}
+                              aria-label="Message actions"
+                              title="Message actions"
+                            >
+                              <MoreVertical className="h-4 w-4" />
+                            </button>
+
+                            {openMessageMenuId === m._id && (
+                              <div
+                                role="menu"
+                                className="absolute right-0 top-full z-50 mt-1.5 min-w-[170px] overflow-hidden rounded-2xl border border-amber-200/90 bg-white py-1.5 shadow-xl shadow-amber-900/10 dark:border-navy-700/60 dark:bg-navy-950"
+                              >
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-amber-950 transition-colors duration-150 hover:bg-amber-100 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-50 dark:hover:bg-navy-800/60"
+                                  onClick={() => handleEditMessage(m)}
+                                  disabled={!canEditDelete}
+                                  title={canEditDelete ? 'Edit message' : 'Edit only available for 15 minutes'}
+                                >
+                                  <Pencil className="h-4 w-4 shrink-0 opacity-80" />
+                                  Edit
+                                </button>
+
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-700 transition-colors duration-150 hover:bg-red-50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60 dark:text-red-400 dark:hover:bg-red-950/50"
+                                  onClick={() => {
+                                    if (!canEditDelete) return;
+                                    setOpenMessageMenuId(null);
+                                    handleDeleteMessage(m._id);
+                                  }}
+                                  disabled={!canEditDelete || deletingMessageId === m._id}
+                                  title={canEditDelete ? 'Delete message' : 'Delete only available for 15 minutes'}
+                                >
+                                  <Trash2 className="h-4 w-4 shrink-0" />
+                                  {deletingMessageId === m._id ? 'Deleting…' : 'Delete'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
                       <p className={cn('mt-1 leading-relaxed', mine ? 'text-white' : 'text-amber-950 dark:text-slate-50')}>
@@ -596,8 +698,9 @@ export default function ChatDashboardPage() {
                         type="button"
                         variant="secondary"
                         size="sm"
-                        disabled={!activeUserId.trim()}
-                        onClick={() => setInput('hi')}
+                        className="h-8 px-3 text-xs"
+                        disabled={!activeUserId.trim() || sendingMessage}
+                        onClick={() => sendQuickMessage('hi')}
                       >
                         Hi
                       </Button>
@@ -605,8 +708,9 @@ export default function ChatDashboardPage() {
                         type="button"
                         variant="secondary"
                         size="sm"
-                        disabled={!activeUserId.trim()}
-                        onClick={() => setInput('hello')}
+                        className="h-8 px-3 text-xs"
+                        disabled={!activeUserId.trim() || sendingMessage}
+                        onClick={() => sendQuickMessage('hello')}
                       >
                         Hello
                       </Button>
@@ -614,8 +718,9 @@ export default function ChatDashboardPage() {
                         type="button"
                         variant="secondary"
                         size="sm"
-                        disabled={!activeUserId.trim()}
-                        onClick={() => setInput('namaste')}
+                        className="h-8 px-3 text-xs"
+                        disabled={!activeUserId.trim() || sendingMessage}
+                        onClick={() => sendQuickMessage('namaste')}
                       >
                         Namaste
                       </Button>
