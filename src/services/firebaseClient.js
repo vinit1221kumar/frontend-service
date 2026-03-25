@@ -13,14 +13,33 @@ const firebaseConfig = {
   databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL
 };
 
+const requiredKeys = ['apiKey', 'authDomain', 'projectId', 'appId'];
+
 function ensureClient() {
   if (typeof window === 'undefined') {
     throw new Error('Firebase client is only available in the browser runtime.');
   }
 }
 
+export function isFirebaseConfigured() {
+  return requiredKeys.every((key) => Boolean(firebaseConfig[key]));
+}
+
+export function createFirebaseConfigError() {
+  const error = new Error('Firebase configuration is missing. Set NEXT_PUBLIC_FIREBASE_* environment variables.');
+  error.code = 'auth/firebase-not-configured';
+  return error;
+}
+
+function ensureFirebaseConfigured() {
+  if (!isFirebaseConfigured()) {
+    throw createFirebaseConfigError();
+  }
+}
+
 function getFirebaseApp() {
   ensureClient();
+  ensureFirebaseConfigured();
   return getApps().length ? getApp() : initializeApp(firebaseConfig);
 }
 

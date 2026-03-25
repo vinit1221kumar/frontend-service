@@ -1,6 +1,10 @@
 export function toFirebaseAuthMessage(error, mode = 'generic') {
   const code = error?.code || '';
 
+  if (code === 'auth/firebase-not-configured') {
+    return 'Firebase credentials are not configured. Frontend can run, but authentication is disabled until NEXT_PUBLIC_FIREBASE_* values are set.';
+  }
+
   if (code === 'auth/invalid-api-key') {
     return 'Firebase config is missing or invalid. Fill NEXT_PUBLIC_FIREBASE_* values in .env.development.local and restart the dev server.';
   }

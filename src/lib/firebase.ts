@@ -13,6 +13,7 @@ const firebaseConfig = {
 
 let appInstance: FirebaseApp | null = null;
 let dbInstance: Database | null = null;
+const requiredKeys: Array<keyof typeof firebaseConfig> = ["apiKey", "authDomain", "projectId", "appId"];
 
 function ensureBrowserRuntime() {
   if (typeof window === "undefined") {
@@ -20,8 +21,21 @@ function ensureBrowserRuntime() {
   }
 }
 
+export function isFirebaseConfigured() {
+  return requiredKeys.every((key) => Boolean(firebaseConfig[key]));
+}
+
+function ensureFirebaseConfigured() {
+  if (!isFirebaseConfigured()) {
+    const error = new Error("Firebase configuration is missing. Set NEXT_PUBLIC_FIREBASE_* values.");
+    (error as Error & { code?: string }).code = "auth/firebase-not-configured";
+    throw error;
+  }
+}
+
 export function getFirebaseApp(): FirebaseApp {
   ensureBrowserRuntime();
+  ensureFirebaseConfigured();
   if (appInstance) return appInstance;
   appInstance = getApps().length ? getApp() : initializeApp(firebaseConfig);
   return appInstance;

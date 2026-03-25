@@ -8,7 +8,7 @@ import {
   updateProfile
 } from 'firebase/auth';
 import { get, ref, set, update } from 'firebase/database';
-import { getFirebaseAuth, getRealtimeDb } from './firebaseClient';
+import { createFirebaseConfigError, getFirebaseAuth, getRealtimeDb, isFirebaseConfigured } from './firebaseClient';
 
 function toProfile(authUser, profile = {}) {
   const username = profile.username || authUser.displayName || authUser.email?.split('@')[0] || 'User';
@@ -37,6 +37,9 @@ async function ensureUserProfile({ realtimeDb, user, fallbackEmail, fallbackUser
 }
 
 export async function registerWithFirebase({ username, email, password }) {
+  if (!isFirebaseConfigured()) {
+    throw createFirebaseConfigError();
+  }
   const firebaseAuth = getFirebaseAuth();
   const realtimeDb = getRealtimeDb();
   const credential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
@@ -57,6 +60,9 @@ export async function registerWithFirebase({ username, email, password }) {
 }
 
 export async function loginWithFirebase({ email, password }) {
+  if (!isFirebaseConfigured()) {
+    throw createFirebaseConfigError();
+  }
   const firebaseAuth = getFirebaseAuth();
   const realtimeDb = getRealtimeDb();
   const credential = await signInWithEmailAndPassword(firebaseAuth, email, password);
@@ -73,6 +79,9 @@ export async function loginWithFirebase({ email, password }) {
 }
 
 export async function loginWithGoogleFirebase() {
+  if (!isFirebaseConfigured()) {
+    throw createFirebaseConfigError();
+  }
   const firebaseAuth = getFirebaseAuth();
   const realtimeDb = getRealtimeDb();
   const provider = new GoogleAuthProvider();
@@ -89,6 +98,9 @@ export async function loginWithGoogleFirebase() {
 }
 
 export async function logoutFromFirebase() {
+  if (!isFirebaseConfigured()) {
+    return;
+  }
   const firebaseAuth = getFirebaseAuth();
   const realtimeDb = getRealtimeDb();
   const current = firebaseAuth.currentUser;
@@ -106,10 +118,13 @@ export async function logoutFromFirebase() {
 }
 
 export async function getCurrentAuthSnapshot(authUser) {
-  const realtimeDb = getRealtimeDb();
   if (!authUser) {
     return { token: null, user: null };
   }
+  if (!isFirebaseConfigured()) {
+    return { token: null, user: null };
+  }
+  const realtimeDb = getRealtimeDb();
   const [token, profileSnap] = await Promise.all([
     authUser.getIdToken(),
     get(ref(realtimeDb, `users/${authUser.uid}`))
@@ -122,6 +137,10 @@ export async function getCurrentAuthSnapshot(authUser) {
 }
 
 export function subscribeToAuthState(handler) {
+  if (!isFirebaseConfigured()) {
+    handler(null);
+    return () => undefined;
+  }
   const firebaseAuth = getFirebaseAuth();
   return onAuthStateChanged(firebaseAuth, handler);
 }
