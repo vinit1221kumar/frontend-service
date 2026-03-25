@@ -1,4 +1,4 @@
-import { get, limitToLast, off, onChildAdded, onValue, push, query, ref, set, update } from 'firebase/database';
+import { get, limitToLast, off, onChildAdded, onValue, orderByChild, push, query, ref, set, update } from 'firebase/database';
 import { getRealtimeDb } from './firebaseClient';
 
 function directThreadId(userA, userB) {
@@ -71,6 +71,54 @@ export async function setMyPresence(userId, online) {
   });
 }
 
+export function subscribeRecentDirectChats(userId, callback, limit = 30) {
+  const realtimeDb = getRealtimeDb();
+  if (!userId) {
+    callback([]);
+    return () => undefined;
+  }
+
+  const recentRef = query(
+    ref(realtimeDb, `recentDirectChats/${userId}`),
+    orderByChild('updatedAt'),
+    limitToLast(limit)
+  );
+
+  const listener = async (snap) => {
+    if (!snap.exists()) {
+      callback([]);
+      return;
+    }
+
+    const usersSnap = await get(ref(realtimeDb, 'users'));
+    const usersById = {};
+    if (usersSnap.exists()) {
+      Object.values(usersSnap.val()).forEach((item) => {
+        if (item?.uid) {
+          usersById[item.uid] = item.username || item.email?.split('@')[0] || 'User';
+        }
+      });
+    }
+
+    const items = Object.entries(snap.val())
+      .map(([threadId, value]) => ({
+        threadId,
+        peerId: value.peerId,
+        peerUsername: usersById[value.peerId] || 'User',
+        lastMessage: value.lastMessage || '',
+        lastSenderId: value.lastSenderId || '',
+        lastMessageAt: value.updatedAt || 0
+      }))
+      .filter((item) => item.peerId)
+      .sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+
+    callback(items);
+  };
+
+  onValue(recentRef, listener);
+  return () => off(recentRef, 'value', listener);
+}
+
 export async function listDirectMessages(userId, peerId) {
   const realtimeDb = getRealtimeDb();
   const threadId = directThreadId(userId, peerId);
@@ -98,13 +146,34 @@ export function subscribeDirectMessages(userId, peerId, callback) {
 export async function sendDirectMessage({ senderId, receiverId, content }) {
   const realtimeDb = getRealtimeDb();
   const threadId = directThreadId(senderId, receiverId);
+  const now = Date.now();
   const node = push(ref(realtimeDb, `dmMessages/${threadId}`));
   await set(node, {
     senderId,
     receiverId,
     content,
-    createdAt: Date.now()
+    createdAt: now
   });
+
+  try {
+    await update(ref(realtimeDb), {
+      [`recentDirectChats/${senderId}/${threadId}`]: {
+        peerId: receiverId,
+        lastMessage: content,
+        lastSenderId: senderId,
+        updatedAt: now
+      },
+      [`recentDirectChats/${receiverId}/${threadId}`]: {
+        peerId: senderId,
+        lastMessage: content,
+        lastSenderId: senderId,
+        updatedAt: now
+      }
+    });
+  } catch {
+    /* ignore recent index failures to avoid blocking messages */
+  }
+
   return node.key;
 }
 

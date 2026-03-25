@@ -79,9 +79,6 @@ export function AuthProvider({ children }) {
   };
 
   const logout = async () => {
-    if (user?.id) {
-      await setMyPresence(user.id, false);
-    }
     await logoutFromFirebase();
     setToken(null);
     setUser(null);

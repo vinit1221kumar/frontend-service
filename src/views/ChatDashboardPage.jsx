@@ -11,12 +11,12 @@ import {
   searchUsersByUsername,
   sendDirectMessage,
   subscribeDirectMessages,
+  subscribeRecentDirectChats,
   subscribeUserPresence
 } from '../services/firebaseChat';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft,
-  Copy,
   Loader2,
   MessageCircle,
   Phone,
@@ -35,7 +35,8 @@ export default function ChatDashboardPage() {
   const [input, setInput] = useState('');
   const [activeUserId, setActiveUserId] = useState('');
   const [peerUsername, setPeerUsername] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [recentChats, setRecentChats] = useState([]);
+  const [recentLoading, setRecentLoading] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -116,16 +117,22 @@ export default function ChatDashboardPage() {
     };
   }, [activeUserId]);
 
-  const copyMyId = async () => {
-    if (!user?.id) return;
-    try {
-      await navigator.clipboard.writeText(user.id);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* ignore */
+  useEffect(() => {
+    if (!user?.id) {
+      setRecentChats([]);
+      return;
     }
-  };
+
+    setRecentLoading(true);
+    const unsubscribe = subscribeRecentDirectChats(user.id, (items) => {
+      setRecentChats(items);
+      setRecentLoading(false);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id || !activeUserId.trim()) {
@@ -286,28 +293,39 @@ export default function ChatDashboardPage() {
                 </div>
               )}
 
-              {user?.id && (
-                <div className="rounded-2xl border border-amber-300/60 bg-gradient-to-br from-amber-100/90 to-amber-50/80 p-3 dark:border-navy-600/50 dark:from-navy-900/60 dark:to-navy-950/60">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-amber-900 dark:text-slate-200">
-                      Your ID
-                    </span>
-                    <Button
+              <div className="space-y-2">
+                <p className="px-1 text-xs font-semibold uppercase tracking-wide text-amber-800/80 dark:text-slate-300/90">
+                  Recent chats
+                </p>
+
+                {recentLoading ? (
+                  <div className="flex items-center gap-2 px-2 py-2 text-xs text-amber-700 dark:text-slate-300">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading…
+                  </div>
+                ) : recentChats.length === 0 ? (
+                  <p className="px-2 py-2 text-xs text-amber-700/80 dark:text-slate-300/80">No recent chats yet.</p>
+                ) : (
+                  recentChats.map((chat) => (
+                    <button
+                      key={chat.threadId}
                       type="button"
-                      variant="secondary"
-                      size="sm"
-                      className="h-7 gap-1 px-2 text-xs"
-                      onClick={copyMyId}
+                      onClick={() => pickPeer(chat.peerId, chat.peerUsername)}
+                      className={cn(
+                        'w-full rounded-xl border px-3 py-2 text-left transition-colors duration-150',
+                        activeUserId.trim() === chat.peerId
+                          ? 'border-amber-300/80 bg-amber-100/70 dark:border-navy-600/60 dark:bg-navy-900/50'
+                          : 'border-amber-200/70 bg-white/70 hover:bg-amber-50 dark:border-navy-700/50 dark:bg-navy-950/40 dark:hover:bg-navy-900/50'
+                      )}
                     >
-                      <Copy className="h-3.5 w-3.5" />
-                      {copied ? 'Copied' : 'Copy'}
-                    </Button>
-                  </div>
-                  <div className="mt-2 break-all font-mono text-[11px] leading-relaxed text-amber-950 dark:text-slate-100/95">
-                    {user.id}
-                  </div>
-                </div>
-              )}
+                      <p className="truncate text-sm font-semibold text-amber-950 dark:text-slate-100">{chat.peerUsername}</p>
+                      <p className="mt-0.5 truncate text-xs text-amber-700/90 dark:text-slate-300/90">
+                        {chat.lastMessage || 'Message'}
+                      </p>
+                    </button>
+                  ))
+                )}
+              </div>
             </div>
           </aside>
 

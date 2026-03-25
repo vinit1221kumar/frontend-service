@@ -93,10 +93,14 @@ export async function logoutFromFirebase() {
   const realtimeDb = getRealtimeDb();
   const current = firebaseAuth.currentUser;
   if (current) {
-    await update(ref(realtimeDb, `presence/${current.uid}`), {
-      online: false,
-      lastSeen: Date.now()
-    });
+    try {
+      await update(ref(realtimeDb, `presence/${current.uid}`), {
+        online: false,
+        lastSeen: Date.now()
+      });
+    } catch {
+      /* presence update is best-effort; continue sign-out */
+    }
   }
   await signOut(firebaseAuth);
 }
