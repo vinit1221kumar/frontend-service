@@ -1,6 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  Mic,
+  MicOff,
+  Phone,
+  PhoneCall,
+  PhoneIncoming,
+  PhoneOff,
+  Radio,
+  UserRound,
+  Video,
+  VideoOff,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useAuthContext } from "@/context/AuthContext";
 import {
   acceptCall,
@@ -24,8 +38,17 @@ import {
   setRemoteDescription,
 } from "@/lib/webrtc";
 import { CallMode, ConnectionStatus, OfferPayload } from "@/types/call";
+import { cn } from "@/lib/utils";
 
 type UnsubscribeFn = () => void;
+type CallUITheme = "default" | "enhanced";
+
+interface CallUIProps {
+  defaultMode?: CallMode;
+  title?: string;
+  description?: string;
+  theme?: CallUITheme;
+}
 
 function createRingtonePlayer() {
   let intervalId: ReturnType<typeof setInterval> | null = null;
@@ -33,6 +56,9 @@ function createRingtonePlayer() {
 
   function beep() {
     if (!audioContext) audioContext = new AudioContext();
+    if (audioContext.state === "suspended") {
+      audioContext.resume().catch(() => undefined);
+    }
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
     oscillator.type = "sine";
@@ -59,8 +85,35 @@ function createRingtonePlayer() {
   };
 }
 
-export default function CallUI() {
+function getStatusLabel(status: ConnectionStatus) {
+  switch (status) {
+    case "requesting-media":
+      return "Requesting microphone/camera access";
+    case "calling":
+      return "Calling";
+    case "ringing":
+      return "Incoming call";
+    case "connecting":
+      return "Connecting";
+    case "connected":
+      return "Connected";
+    case "ended":
+      return "Call ended";
+    case "failed":
+      return "Call failed";
+    default:
+      return "Ready";
+  }
+}
+
+export default function CallUI({
+  defaultMode = "video",
+  title = "Direct voice and video calls",
+  description = "Call another signed-in user by their user ID. The receiver can accept or reject from the same page.",
+  theme = "default",
+}: CallUIProps) {
   const auth = useAuthContext();
+  const searchParams = useSearchParams();
   const currentUserId = auth?.user?.id as string | undefined;
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -68,21 +121,40 @@ export default function CallUI() {
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
-  const unsubscribeRefs = useRef<UnsubscribeFn[]>([]);
+  const pendingIceCandidatesRef = useRef<Parameters<typeof addIceCandidate>[1][]>([]);
+  const remoteDescriptionSetRef = useRef(false);
+  const incomingMediaPromiseRef = useRef<Promise<MediaStream> | null>(null);
+  const sessionUnsubRefs = useRef<UnsubscribeFn[]>([]);
+  const incomingCallUnsubRef = useRef<UnsubscribeFn | null>(null);
   const ringtoneRef = useRef(createRingtonePlayer());
 
-  const [calleeId, setCalleeId] = useState("");
+  const calleeParam = searchParams.get("callee")?.trim() ?? "";
+  const queryMode = searchParams.get("mode");
+  const initialMode = queryMode === "audio" || queryMode === "video" ? queryMode : defaultMode;
+
+  const [calleeId, setCalleeId] = useState(calleeParam);
   const [peerId, setPeerId] = useState<string | null>(null);
-  const [callMode, setCallMode] = useState<CallMode>("video");
+  const [callMode, setCallMode] = useState<CallMode>(initialMode);
   const [incomingOffer, setIncomingOffer] = useState<OfferPayload | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [connectionState, setConnectionState] = useState<RTCPeerConnectionState>("new");
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [micEnabled, setMicEnabled] = useState(true);
-  const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [cameraEnabled, setCameraEnabled] = useState(defaultMode === "video");
 
-  const hasIncomingCall = Boolean(incomingOffer);
+  useEffect(() => {
+    setCalleeId(calleeParam);
+  }, [calleeParam]);
+
+  useEffect(() => {
+    setCallMode(initialMode);
+  }, [initialMode]);
+
+  const clearSessionListeners = useCallback(() => {
+    sessionUnsubRefs.current.forEach((unsubscribe) => unsubscribe());
+    sessionUnsubRefs.current = [];
+  }, []);
 
   const stopAllTracks = useCallback(() => {
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -96,87 +168,114 @@ export default function CallUI() {
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
   }, []);
 
-  const detachListeners = useCallback(() => {
-    unsubscribeRefs.current.forEach((unsubscribe) => unsubscribe());
-    unsubscribeRefs.current = [];
-  }, []);
-
-  const hardCleanup = useCallback(async () => {
-    ringtoneRef.current.stop();
-    detachListeners();
-    cleanupPeerConnection(peerConnectionRef.current);
-    peerConnectionRef.current = null;
-    stopAllTracks();
-    clearMediaElements();
+  const resetLocalState = useCallback(() => {
     setIncomingOffer(null);
     setPeerId(null);
     setConnectionState("new");
     setMicEnabled(true);
-    setCameraEnabled(true);
-  }, [clearMediaElements, detachListeners, stopAllTracks]);
+    setCameraEnabled(callMode === "video");
+  }, [callMode]);
 
-  const setupMedia = useCallback(
-    async (mode: CallMode) => {
-      setStatus("requesting-media");
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: mode === "video",
-        });
-        localStreamRef.current = stream;
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
-        return stream;
-      } catch (mediaError) {
-        console.error("Failed to get user media", mediaError);
-        throw new Error(
-          "Could not access microphone/camera. Please verify permissions."
-        );
-      }
-    },
-    []
-  );
+  const hardCleanup = useCallback(async () => {
+    ringtoneRef.current.stop();
+    clearSessionListeners();
+    cleanupPeerConnection(peerConnectionRef.current);
+    peerConnectionRef.current = null;
+    pendingIceCandidatesRef.current = [];
+    remoteDescriptionSetRef.current = false;
+    incomingMediaPromiseRef.current = null;
+    stopAllTracks();
+    clearMediaElements();
+    resetLocalState();
+  }, [clearMediaElements, clearSessionListeners, resetLocalState, stopAllTracks]);
 
-  const setupPeerConnection = useCallback(
-    (userId: string, targetPeerId: string) => {
-      const remoteStream = new MediaStream();
-      remoteStreamRef.current = remoteStream;
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStream;
-      }
-
-      const peerConnection = createPeerConnection({
-        senderUserId: userId,
-        onIceCandidate: async (candidate) => {
-          try {
-            await publishIceCandidate({
-              targetUserId: targetPeerId,
-              fromUserId: userId,
-              candidate,
-            });
-          } catch (candidateError) {
-            console.error("Failed to publish ICE candidate", candidateError);
-          }
-        },
-        onTrack: (event) => {
-          event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
-        },
-        onConnectionStateChange: (state) => {
-          setConnectionState(state);
-          if (state === "connected") {
-            setStatus("connected");
-          } else if (state === "failed" || state === "disconnected") {
-            setStatus("failed");
-            setError("Connection failed or disconnected.");
-          }
-        },
+  const setupMedia = useCallback(async (mode: CallMode) => {
+    setStatus("requesting-media");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: mode === "video",
       });
+      localStreamRef.current = stream;
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+      setCameraEnabled(mode === "video");
+      setMicEnabled(true);
+      return stream;
+    } catch (mediaError) {
+      console.error("Failed to get user media", mediaError);
+      throw new Error(
+        mode === "video"
+          ? "Could not access microphone/camera. Please verify permissions."
+          : "Could not access microphone. Please verify permissions."
+      );
+    }
+  }, []);
 
-      peerConnectionRef.current = peerConnection;
-      return peerConnection;
+  const setupPeerConnection = useCallback((userId: string, targetPeerId: string) => {
+    pendingIceCandidatesRef.current = [];
+    remoteDescriptionSetRef.current = false;
+    const remoteStream = new MediaStream();
+    remoteStreamRef.current = remoteStream;
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+
+    const peerConnection = createPeerConnection({
+      senderUserId: userId,
+      onIceCandidate: async (candidate) => {
+        try {
+          await publishIceCandidate({
+            targetUserId: targetPeerId,
+            fromUserId: userId,
+            candidate,
+          });
+        } catch (candidateError) {
+          console.error("Failed to publish ICE candidate", candidateError);
+        }
+      },
+      onTrack: (event) => {
+        event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
+      },
+      onConnectionStateChange: (nextState) => {
+        setConnectionState(nextState);
+        if (nextState === "connected") {
+          setStatus("connected");
+          setError(null);
+        } else if (nextState === "failed") {
+          setStatus("failed");
+          setError("Connection failed.");
+        } else if (nextState === "disconnected" || nextState === "closed") {
+          setStatus("ended");
+        }
+      },
+    });
+
+    peerConnectionRef.current = peerConnection;
+    return peerConnection;
+  }, []);
+
+  const flushPendingIceCandidates = useCallback(async () => {
+    if (!peerConnectionRef.current || !remoteDescriptionSetRef.current) return;
+    const pendingCandidates = pendingIceCandidatesRef.current.splice(0);
+    for (const candidate of pendingCandidates) {
+      try {
+        await addIceCandidate(peerConnectionRef.current, candidate);
+      } catch (addError) {
+        console.error("Failed to flush remote ICE candidate", addError);
+      }
+    }
+  }, []);
+
+  const applyRemoteDescription = useCallback(
+    async (description: RTCSessionDescriptionInit) => {
+      if (!peerConnectionRef.current) return;
+      await setRemoteDescription(peerConnectionRef.current, description);
+      remoteDescriptionSetRef.current = true;
+      await flushPendingIceCandidates();
     },
-    []
+    [flushPendingIceCandidates]
   );
 
   const subscribeForRemoteIce = useCallback((userId: string, fromUserId: string) => {
@@ -186,28 +285,51 @@ export default function CallUI() {
       onCandidate: async (candidate) => {
         try {
           if (!peerConnectionRef.current) return;
+          if (!remoteDescriptionSetRef.current) {
+            pendingIceCandidatesRef.current.push(candidate);
+            return;
+          }
           await addIceCandidate(peerConnectionRef.current, candidate);
         } catch (addError) {
           console.error("Failed to add remote ICE candidate", addError);
         }
       },
     });
-    unsubscribeRefs.current.push(unsubscribe);
+    sessionUnsubRefs.current.push(unsubscribe);
   }, []);
+
+  const ensureIncomingMedia = useCallback(
+    async (mode: CallMode) => {
+      if (localStreamRef.current) return localStreamRef.current;
+      if (!incomingMediaPromiseRef.current) {
+        incomingMediaPromiseRef.current = setupMedia(mode).finally(() => {
+          incomingMediaPromiseRef.current = null;
+        });
+      }
+      return incomingMediaPromiseRef.current;
+    },
+    [setupMedia]
+  );
 
   const beginCall = useCallback(async () => {
     if (!currentUserId) {
       setError("You must be logged in to start a call.");
       return;
     }
-    if (!calleeId.trim()) {
+
+    const targetUserId = calleeId.trim();
+    if (!targetUserId) {
       setError("Enter a callee ID.");
+      return;
+    }
+    if (targetUserId === currentUserId) {
+      setError("You cannot call yourself.");
       return;
     }
 
     setError(null);
     setIsBusy(true);
-    const targetUserId = calleeId.trim();
+    clearSessionListeners();
 
     try {
       const stream = await setupMedia(callMode);
@@ -224,9 +346,10 @@ export default function CallUI() {
 
       const unsubscribeAnswer = listenForAnswer(currentUserId, async (answer) => {
         if (!answer || !peerConnectionRef.current) return;
-        await setRemoteDescription(peerConnectionRef.current, answer);
+        await applyRemoteDescription(answer);
         setStatus("connecting");
       });
+
       const unsubscribeRejected = listenForRejection(currentUserId, async (rejected) => {
         if (!rejected) return;
         setError(`Call rejected by ${rejected.byUserId}.`);
@@ -235,7 +358,7 @@ export default function CallUI() {
         setStatus("ended");
       });
 
-      unsubscribeRefs.current.push(unsubscribeAnswer, unsubscribeRejected);
+      sessionUnsubRefs.current.push(unsubscribeAnswer, unsubscribeRejected);
       subscribeForRemoteIce(currentUserId, targetUserId);
       setPeerId(targetUserId);
       setStatus("calling");
@@ -248,10 +371,12 @@ export default function CallUI() {
       setIsBusy(false);
     }
   }, [
-    callMode,
     calleeId,
+    callMode,
+    clearSessionListeners,
     currentUserId,
     hardCleanup,
+    applyRemoteDescription,
     setupMedia,
     setupPeerConnection,
     subscribeForRemoteIce,
@@ -263,13 +388,14 @@ export default function CallUI() {
     setError(null);
     setIsBusy(true);
     ringtoneRef.current.stop();
+    clearSessionListeners();
 
     try {
       const callerId = incomingOffer.fromUserId;
       const stream = await setupMedia(incomingOffer.mode);
       const peerConnection = setupPeerConnection(currentUserId, callerId);
       attachLocalTracks(peerConnection, stream);
-      await setRemoteDescription(peerConnection, incomingOffer);
+      await applyRemoteDescription(incomingOffer);
 
       const answer = await createAnswer(peerConnection);
       await acceptCall({ userId: currentUserId, callerId, answer });
@@ -287,7 +413,16 @@ export default function CallUI() {
     } finally {
       setIsBusy(false);
     }
-  }, [currentUserId, hardCleanup, incomingOffer, setupMedia, setupPeerConnection, subscribeForRemoteIce]);
+  }, [
+    clearSessionListeners,
+    currentUserId,
+    hardCleanup,
+    incomingOffer,
+    applyRemoteDescription,
+    setupMedia,
+    setupPeerConnection,
+    subscribeForRemoteIce,
+  ]);
 
   const rejectIncomingCall = useCallback(async () => {
     if (!currentUserId || !incomingOffer) return;
@@ -297,7 +432,7 @@ export default function CallUI() {
       setIncomingOffer(null);
       setStatus("ended");
     } catch (rejectError) {
-      console.error("Failed to reject call", rejectError);
+      console.error("Failed to reject incoming call", rejectError);
       setError("Could not reject incoming call.");
     }
   }, [currentUserId, incomingOffer]);
@@ -330,8 +465,10 @@ export default function CallUI() {
   const toggleCamera = useCallback(() => {
     const stream = localStreamRef.current;
     if (!stream) return;
+    const videoTracks = stream.getVideoTracks();
+    if (!videoTracks.length) return;
     const nextEnabled = !cameraEnabled;
-    stream.getVideoTracks().forEach((track) => {
+    videoTracks.forEach((track) => {
       track.enabled = nextEnabled;
     });
     setCameraEnabled(nextEnabled);
@@ -339,135 +476,318 @@ export default function CallUI() {
 
   useEffect(() => {
     if (!currentUserId) return;
+
     const unsubscribeIncoming = listenForIncomingCall(currentUserId, (offer) => {
       if (!offer) {
         setIncomingOffer(null);
         return;
       }
-      setIncomingOffer(offer);
-      setCallMode(offer.mode);
+
+      setIncomingOffer((currentOffer) => {
+        if (currentOffer?.createdAt === offer.createdAt && currentOffer.fromUserId === offer.fromUserId) {
+          return currentOffer;
+        }
+        return offer;
+      });
       setPeerId(offer.fromUserId);
-      setStatus("ringing");
+      setStatus((currentStatus) => {
+        if (currentStatus === "connected" || currentStatus === "connecting" || currentStatus === "calling") {
+          return currentStatus;
+        }
+        return "ringing";
+      });
       ringtoneRef.current.start();
+      ensureIncomingMedia(offer.mode).catch((mediaError) => {
+        console.error("Failed to prepare local media for incoming call", mediaError);
+        setError(mediaError instanceof Error ? mediaError.message : "Could not prepare local media.");
+      });
     });
-    unsubscribeRefs.current.push(unsubscribeIncoming);
+
+    incomingCallUnsubRef.current = unsubscribeIncoming;
 
     return () => {
-      unsubscribeIncoming();
+      incomingCallUnsubRef.current?.();
+      incomingCallUnsubRef.current = null;
       hardCleanup().catch(() => undefined);
     };
-  }, [currentUserId, hardCleanup]);
+  }, [currentUserId, ensureIncomingMedia, hardCleanup]);
 
   const canToggleCamera = Boolean(localStreamRef.current?.getVideoTracks().length);
+  const hasIncomingCall = Boolean(incomingOffer);
+  const activeMode = incomingOffer?.mode ?? callMode;
+  const isEnhanced = theme === "enhanced";
+  const isVideoMode = activeMode === "video";
+  const heroIcon = isVideoMode ? Video : PhoneCall;
+  const HeroIcon = heroIcon;
+  const statusToneClass =
+    status === "connected"
+      ? "text-emerald-700 dark:text-emerald-300"
+      : status === "failed"
+        ? "text-rose-700 dark:text-rose-300"
+        : status === "ringing"
+          ? "text-amber-800 dark:text-sky-300"
+          : "text-amber-900 dark:text-slate-100";
+  const panelClassName = isEnhanced
+    ? "card relative overflow-hidden border-amber-200/80 bg-white/85 p-5 shadow-xl shadow-amber-200/35 dark:border-navy-700/50 dark:bg-navy-950/80"
+    : "rounded-lg border border-slate-200 p-4 dark:border-navy-700";
+  const fieldClassName = isEnhanced ? "input" : "rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-sky-500 dark:border-navy-600 dark:bg-navy-950 dark:text-slate-50";
+  const videoFrameClassName = isEnhanced
+    ? "aspect-video w-full rounded-[1.4rem] bg-slate-950 object-cover ring-1 ring-white/10"
+    : "aspect-video w-full rounded bg-slate-900 object-cover";
+  const audioFrameClassName = isEnhanced
+    ? "flex aspect-video items-center justify-center rounded-[1.4rem] bg-[radial-gradient(circle_at_top,rgba(251,191,36,0.18),transparent_40%),linear-gradient(145deg,#111827,#020617)] text-sm text-slate-100 ring-1 ring-white/10 dark:bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_40%),linear-gradient(145deg,#0f172a,#020617)]"
+    : "flex aspect-video items-center justify-center rounded bg-slate-900 text-sm text-slate-200";
 
   return (
     <section className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 sm:p-8">
-      <h1 className="text-2xl font-semibold text-slate-900">RTDB WebRTC Call</h1>
-      <p className="text-sm text-slate-600">
-        Your user ID: <span className="font-mono">{currentUserId ?? "Not signed in"}</span>
-      </p>
+      <div
+        className={cn(
+          "space-y-2",
+          isEnhanced &&
+            "relative overflow-hidden rounded-[1.75rem] border border-amber-200/70 bg-gradient-to-br from-amber-100/85 via-yellow-50/80 to-white/75 px-5 py-5 shadow-[0_24px_80px_-40px_rgba(217,119,6,0.35)] dark:border-navy-700/50 dark:bg-gradient-to-br dark:from-navy-900/85 dark:via-navy-950/90 dark:to-slate-950/80"
+        )}
+      >
+        {isEnhanced ? (
+          <>
+            <div className="anim-glow pointer-events-none absolute -right-8 top-0 h-28 w-28 rounded-full bg-amber-300/30 dark:bg-sky-500/15" />
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="badge mb-2 inline-flex">
+                  {isVideoMode ? "Live video" : "Live voice"}
+                </div>
+                <h1 className="text-2xl font-bold tracking-tight text-amber-950 dark:text-slate-50 sm:text-3xl">
+                  {title}
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm text-amber-900/85 dark:text-slate-200/80">
+                  {description}
+                </p>
+              </div>
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-amber-200/80 bg-white/75 text-amber-700 shadow-sm dark:border-navy-700/60 dark:bg-navy-900/75 dark:text-sky-300">
+                <HeroIcon className="h-5 w-5" />
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-50">{title}</h1>
+            <p className="text-sm text-slate-600 dark:text-slate-300">{description}</p>
+          </>
+        )}
+        <p className="text-sm text-slate-600 dark:text-slate-300">
+          Your user ID: <span className="font-mono">{currentUserId ?? "Not signed in"}</span>
+        </p>
+      </div>
 
-      <div className="grid gap-4 rounded-lg border border-slate-200 p-4 sm:grid-cols-2">
+      <div
+        className={cn(
+          "grid gap-4 sm:grid-cols-2",
+          isEnhanced
+            ? "card border-amber-200/80 bg-white/80 p-4 dark:border-navy-700/50 dark:bg-navy-950/75"
+            : "rounded-lg border border-slate-200 p-4 dark:border-navy-700"
+        )}
+      >
         <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-slate-700">Callee ID</span>
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Callee ID</span>
           <input
             value={calleeId}
-            onChange={(e) => setCalleeId(e.target.value)}
+            onChange={(event) => setCalleeId(event.target.value)}
             placeholder="Enter callee user ID"
-            className="rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-sky-500"
+            className={fieldClassName}
           />
         </label>
         <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-slate-700">Call Mode</span>
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Call mode</span>
           <select
             value={callMode}
-            onChange={(e) => setCallMode(e.target.value as CallMode)}
-            className="rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-sky-500"
+            onChange={(event) => setCallMode(event.target.value as CallMode)}
+            className={fieldClassName}
           >
             <option value="video">Video call</option>
-            <option value="audio">Audio only</option>
+            <option value="audio">Voice call</option>
           </select>
         </label>
       </div>
 
-      <div className="flex flex-wrap gap-3">
-        <button
+      <div
+        className={cn(
+          "flex flex-wrap gap-3",
+          isEnhanced &&
+            "rounded-[1.5rem] border border-amber-200/70 bg-white/65 p-3 shadow-lg shadow-amber-100/30 dark:border-navy-700/50 dark:bg-navy-950/55"
+        )}
+      >
+        <Button
           type="button"
           onClick={beginCall}
           disabled={isBusy || !currentUserId}
-          className="rounded-md bg-sky-600 px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-60"
+          className={cn(isEnhanced && "rounded-2xl px-5")}
         >
-          {isBusy ? "Connecting..." : "Start Call"}
-        </button>
-        <button
+          <PhoneCall className="mr-2 h-4 w-4" />
+          {isBusy ? "Connecting..." : "Start call"}
+        </Button>
+        <Button
           type="button"
+          variant="secondary"
           onClick={acceptIncomingCall}
           disabled={isBusy || !hasIncomingCall}
-          className="rounded-md bg-emerald-600 px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-60"
+          className={cn(isEnhanced && "rounded-2xl px-5")}
         >
-          Accept Call
-        </button>
-        <button
+          <PhoneIncoming className="mr-2 h-4 w-4" />
+          Accept
+        </Button>
+        <Button
           type="button"
+          variant="secondary"
           onClick={rejectIncomingCall}
           disabled={isBusy || !hasIncomingCall}
-          className="rounded-md bg-amber-600 px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-60"
+          className={cn(isEnhanced && "rounded-2xl px-5")}
         >
-          Reject Call
-        </button>
-        <button
+          <PhoneOff className="mr-2 h-4 w-4" />
+          Reject
+        </Button>
+        <Button
           type="button"
+          variant="destructive"
           onClick={leaveCall}
-          disabled={!peerId}
-          className="rounded-md bg-rose-600 px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={!peerId && !hasIncomingCall}
+          className={cn(isEnhanced && "rounded-2xl px-5")}
         >
-          End Call
-        </button>
-        <button
+          <Phone className="mr-2 h-4 w-4" />
+          End
+        </Button>
+        <Button
           type="button"
+          variant="secondary"
           onClick={toggleMic}
           disabled={!localStreamRef.current}
-          className="rounded-md border border-slate-300 px-4 py-2 text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className={cn(isEnhanced && "rounded-2xl px-5")}
         >
-          {micEnabled ? "Mute Mic" : "Unmute Mic"}
-        </button>
-        <button
+          {micEnabled ? <Mic className="mr-2 h-4 w-4" /> : <MicOff className="mr-2 h-4 w-4" />}
+          {micEnabled ? "Mute mic" : "Unmute mic"}
+        </Button>
+        <Button
           type="button"
+          variant="secondary"
           onClick={toggleCamera}
           disabled={!canToggleCamera}
-          className="rounded-md border border-slate-300 px-4 py-2 text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className={cn(isEnhanced && "rounded-2xl px-5")}
         >
-          {cameraEnabled ? "Turn Camera Off" : "Turn Camera On"}
-        </button>
+          {cameraEnabled ? (
+            <>
+              <VideoOff className="mr-2 h-4 w-4" />
+              Camera off
+            </>
+          ) : (
+            <>
+              <Video className="mr-2 h-4 w-4" />
+              Camera on
+            </>
+          )}
+        </Button>
+      </div>
+
+      <div className={panelClassName}>
+        {isEnhanced && (
+          <div className="pointer-events-none absolute right-0 top-0 h-20 w-20 rounded-full bg-amber-300/15 blur-2xl dark:bg-sky-500/10" />
+        )}
+        <div className="grid gap-3 sm:grid-cols-4">
+          <div className="rounded-2xl border border-amber-200/60 bg-amber-50/70 px-4 py-3 dark:border-navy-700/50 dark:bg-navy-900/50">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700/80 dark:text-slate-400">
+              Status
+            </div>
+            <div className={cn("mt-1 text-sm font-semibold", statusToneClass)}>{getStatusLabel(status)}</div>
+          </div>
+          <div className="rounded-2xl border border-amber-200/60 bg-amber-50/70 px-4 py-3 dark:border-navy-700/50 dark:bg-navy-900/50">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700/80 dark:text-slate-400">
+              Connection
+            </div>
+            <div className="mt-1 text-sm font-semibold text-amber-950 dark:text-slate-50">{connectionState}</div>
+          </div>
+          <div className="rounded-2xl border border-amber-200/60 bg-amber-50/70 px-4 py-3 dark:border-navy-700/50 dark:bg-navy-900/50">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700/80 dark:text-slate-400">
+              Mode
+            </div>
+            <div className="mt-1 text-sm font-semibold text-amber-950 dark:text-slate-50">
+              {activeMode === "video" ? "Video" : "Voice"}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-amber-200/60 bg-amber-50/70 px-4 py-3 dark:border-navy-700/50 dark:bg-navy-900/50">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700/80 dark:text-slate-400">
+              Peer
+            </div>
+            <div className="mt-1 truncate text-sm font-semibold text-amber-950 dark:text-slate-50">
+              {incomingOffer?.fromUserId || peerId || "Waiting"}
+            </div>
+          </div>
+        </div>
+        {error ? <p className="mt-4 text-sm text-rose-600 dark:text-rose-400">{error}</p> : null}
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <div className="rounded-lg border border-slate-200 p-3">
-          <p className="mb-2 text-sm font-medium text-slate-700">Local stream</p>
-          <video
-            ref={localVideoRef}
-            autoPlay
-            muted
-            playsInline
-            className="aspect-video w-full rounded bg-slate-900 object-cover"
-          />
+        <div className={panelClassName}>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Local stream</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {isVideoMode ? "Your camera preview" : "Your microphone is live"}
+              </p>
+            </div>
+            {isEnhanced && (
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-100/90 text-amber-700 dark:bg-navy-900/80 dark:text-sky-300">
+                {isVideoMode ? <UserRound className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </div>
+            )}
+          </div>
+          {activeMode === "video" ? (
+            <video
+              ref={localVideoRef}
+              autoPlay
+              muted
+              playsInline
+              className={videoFrameClassName}
+            />
+          ) : (
+            <div className={audioFrameClassName}>
+              <div className="space-y-3 text-center">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-white/5">
+                  <Mic className="h-7 w-7" />
+                </div>
+                <div className="text-sm font-medium text-slate-100">Microphone active for voice call</div>
+              </div>
+            </div>
+          )}
         </div>
-        <div className="rounded-lg border border-slate-200 p-3">
-          <p className="mb-2 text-sm font-medium text-slate-700">Remote stream</p>
-          <video
-            ref={remoteVideoRef}
-            autoPlay
-            playsInline
-            className="aspect-video w-full rounded bg-slate-900 object-cover"
-          />
+        <div className={panelClassName}>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Remote stream</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {isVideoMode ? "Remote camera appears here" : "Waiting for remote audio"}
+              </p>
+            </div>
+            {isEnhanced && (
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-100/90 text-amber-700 dark:bg-navy-900/80 dark:text-sky-300">
+                {isVideoMode ? <Video className="h-4 w-4" /> : <Radio className="h-4 w-4" />}
+              </div>
+            )}
+          </div>
+          {activeMode === "video" ? (
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className={videoFrameClassName}
+            />
+          ) : (
+            <div className={audioFrameClassName}>
+              <div className="space-y-3 text-center text-slate-100">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-white/5">
+                  <Radio className="h-7 w-7" />
+                </div>
+                <div className="text-sm font-medium">Waiting for remote audio</div>
+              </div>
+            </div>
+          )}
         </div>
-      </div>
-
-      <div className="rounded-lg border border-slate-200 p-4 text-sm text-slate-700">
-        <p>Status: {status}</p>
-        <p>Peer connection: {connectionState}</p>
-        {incomingOffer ? <p>Incoming from: {incomingOffer.fromUserId}</p> : null}
-        {error ? <p className="mt-2 text-rose-600">{error}</p> : null}
       </div>
     </section>
   );

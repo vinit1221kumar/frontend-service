@@ -37,6 +37,9 @@ export async function startCall(params: {
     createdAt: Date.now(),
   };
   log("startCall -> write offer", { callerId, calleeId, mode });
+  await remove(child(userCallRef(callerId), "answer"));
+  await remove(child(userCallRef(callerId), "rejected"));
+  await remove(child(userCallRef(calleeId), `candidates/${callerId}`));
   await set(child(userCallRef(calleeId), "offer"), offerPayload);
   await remove(child(userCallRef(calleeId), "answer"));
 }
@@ -69,6 +72,8 @@ export async function acceptCall(params: {
   };
   log("acceptCall -> write answer", { userId, callerId });
   await set(child(userCallRef(callerId), "answer"), payload);
+  await remove(child(userCallRef(userId), "offer"));
+  await remove(child(userCallRef(userId), "rejected"));
 }
 
 export function listenForAnswer(

@@ -19,6 +19,10 @@ const ICE_SERVERS = {
 export function useVideoCall({ userId, roomId }) {
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
+  const pendingLocalMediaRef = useRef(null);
+  const pendingIceCandidatesRef = useRef([]);
+  const remoteDescriptionSetRef = useRef(false);
+  const joinedRoomRef = useRef('');
   const seenSignalsRef = useRef(new Set());
   const statusRef = useRef('idle');
 
@@ -41,19 +45,52 @@ export function useVideoCall({ userId, roomId }) {
       pcRef.current.close();
       pcRef.current = null;
     }
+    pendingIceCandidatesRef.current = [];
+    remoteDescriptionSetRef.current = false;
     setRemoteStream(null);
   }, []);
 
   const stopMedia = useCallback(() => {
     localStreamRef.current?.getTracks().forEach((t) => t.stop());
     localStreamRef.current = null;
+    pendingLocalMediaRef.current = null;
     setLocalStream(null);
   }, []);
+
+  const ensureLocalMedia = useCallback(async () => {
+    if (localStreamRef.current) return localStreamRef.current;
+    if (!pendingLocalMediaRef.current) {
+      pendingLocalMediaRef.current = navigator.mediaDevices
+        .getUserMedia({
+          video: { facingMode: 'user' },
+          audio: true
+        })
+        .then((stream) => {
+          localStreamRef.current = stream;
+          setLocalStream(stream);
+          return stream;
+        })
+        .finally(() => {
+          pendingLocalMediaRef.current = null;
+        });
+    }
+    return pendingLocalMediaRef.current;
+  }, []);
+
+  const ensureJoinedRoom = useCallback(async () => {
+    const rid = roomId?.trim();
+    if (!rid || !userId) return { role: 'callee' };
+    if (joinedRoomRef.current === rid) return { role: 'callee' };
+    const result = await joinVideoRoom({ roomId: rid, userId });
+    joinedRoomRef.current = rid;
+    return result;
+  }, [roomId, userId]);
 
   const leaveCall = useCallback(() => {
     if (roomId && userId) {
       leaveVideoRoom({ roomId: roomId.trim(), userId }).catch(() => undefined);
     }
+    joinedRoomRef.current = '';
     cleanupPeer();
     stopMedia();
     setStatus('idle');
@@ -62,6 +99,8 @@ export function useVideoCall({ userId, roomId }) {
   }, [roomId, userId, cleanupPeer, stopMedia]);
 
   const buildPeerConnection = useCallback(() => {
+    pendingIceCandidatesRef.current = [];
+    remoteDescriptionSetRef.current = false;
     const pc = new RTCPeerConnection(ICE_SERVERS);
     pcRef.current = pc;
 
@@ -89,6 +128,28 @@ export function useVideoCall({ userId, roomId }) {
     return pc;
   }, [roomId, userId]);
 
+  const flushPendingIceCandidates = useCallback(async () => {
+    const pc = pcRef.current;
+    if (!pc || !remoteDescriptionSetRef.current) return;
+    const pending = pendingIceCandidatesRef.current.splice(0);
+    for (const candidate of pending) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch {
+        /* ignore stale ICE */
+      }
+    }
+  }, []);
+
+  const applyRemoteDescription = useCallback(
+    async (pc, description) => {
+      await pc.setRemoteDescription(new RTCSessionDescription(description));
+      remoteDescriptionSetRef.current = true;
+      await flushPendingIceCandidates();
+    },
+    [flushPendingIceCandidates]
+  );
+
   const attachLocalToPc = useCallback(
     (pc) => {
       const stream = localStreamRef.current;
@@ -106,17 +167,9 @@ export function useVideoCall({ userId, roomId }) {
     setError('');
     setStatus('joining');
     try {
-      let stream = localStreamRef.current;
-      if (!stream) {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user' },
-          audio: true
-        });
-        localStreamRef.current = stream;
-        setLocalStream(stream);
-      }
+      const stream = await ensureLocalMedia();
       const rid = roomId.trim();
-      const { role } = await joinVideoRoom({ roomId: rid, userId });
+      const { role } = await ensureJoinedRoom();
 
       cleanupPeer();
       const pc = buildPeerConnection();
@@ -138,7 +191,7 @@ export function useVideoCall({ userId, roomId }) {
       setError(e.message || 'Could not access camera or microphone.');
       setStatus('error');
     }
-  }, [roomId, userId, attachLocalToPc, buildPeerConnection, cleanupPeer]);
+  }, [roomId, userId, attachLocalToPc, buildPeerConnection, cleanupPeer, ensureJoinedRoom, ensureLocalMedia]);
 
   useEffect(() => {
     if (!roomId?.trim() || !userId) return;
@@ -154,7 +207,10 @@ export function useVideoCall({ userId, roomId }) {
       let pc = pcRef.current;
 
       if (type === 'ice' && candidate) {
-        if (!pc) return;
+        if (!pc || !remoteDescriptionSetRef.current) {
+          pendingIceCandidatesRef.current.push(candidate);
+          return;
+        }
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch {
@@ -165,13 +221,13 @@ export function useVideoCall({ userId, roomId }) {
 
       if (type === 'offer') {
         if (!pc) {
-          const stream = localStreamRef.current;
-          if (!stream) return;
+          await ensureJoinedRoom();
+          const stream = await ensureLocalMedia();
           pc = buildPeerConnection();
           attachLocalToPc(pc);
         }
         try {
-          await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+          await applyRemoteDescription(pc, { type: 'offer', sdp });
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           await sendVideoSignal({
@@ -189,7 +245,7 @@ export function useVideoCall({ userId, roomId }) {
 
       if (type === 'answer' && pc) {
         try {
-          await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
+          await applyRemoteDescription(pc, { type: 'answer', sdp });
           setStatus('connected');
         } catch (e) {
           setError(e.message || 'Failed to complete connection');
@@ -214,7 +270,7 @@ export function useVideoCall({ userId, roomId }) {
       offSignals();
       offPresence();
     };
-  }, [roomId, userId, buildPeerConnection, attachLocalToPc, cleanupPeer]);
+  }, [roomId, userId, applyRemoteDescription, buildPeerConnection, attachLocalToPc, cleanupPeer, ensureJoinedRoom, ensureLocalMedia]);
 
   const toggleMic = useCallback(() => {
     const stream = localStreamRef.current;

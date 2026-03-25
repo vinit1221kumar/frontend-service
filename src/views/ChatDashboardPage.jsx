@@ -2,12 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { dmVideoRoomId } from '@/lib/dmRoom';
 import { formatPeerPresence } from '@/lib/formatPresence';
 import { cn } from '@/lib/utils';
 import { useAuth } from '../hooks/useAuth';
 import {
+  deleteDirectMessage,
   listDirectMessages,
+  markRecentDirectChatRead,
   searchUsersByUsername,
   sendDirectMessage,
   subscribeDirectMessages,
@@ -23,6 +24,7 @@ import {
   Search,
   Send,
   Sparkles,
+  Trash2,
   Video,
   X
 } from 'lucide-react';
@@ -32,6 +34,7 @@ import { AppMainHeader } from '@/components/AppMainHeader';
 export default function ChatDashboardPage() {
   const { user } = useAuth();
   const [messages, setMessages] = useState([]);
+  const [deletingMessageId, setDeletingMessageId] = useState('');
   const [input, setInput] = useState('');
   const [activeUserId, setActiveUserId] = useState('');
   const [peerUsername, setPeerUsername] = useState('');
@@ -139,6 +142,9 @@ export default function ChatDashboardPage() {
       setMessages([]);
       return;
     }
+
+    markRecentDirectChatRead(user.id, activeUserId.trim()).catch(() => undefined);
+
     let cancelled = false;
     const seen = new Set();
     let unsubscribe = () => undefined;
@@ -153,6 +159,9 @@ export default function ChatDashboardPage() {
           if (seen.has(msg._id)) return;
           seen.add(msg._id);
           setMessages((prev) => [...prev, msg]);
+          if (msg.senderId && msg.senderId !== user.id) {
+            markRecentDirectChatRead(user.id, activeUserId.trim()).catch(() => undefined);
+          }
         });
       } catch {
         if (!cancelled) setMessages([]);
@@ -174,6 +183,24 @@ export default function ChatDashboardPage() {
       content: input.trim()
     });
     setInput('');
+  };
+
+  const handleDeleteMessage = async (messageId) => {
+    if (!messageId || !user?.id || !activeUserId.trim()) return;
+    if (typeof window !== 'undefined' && !window.confirm('Are you sure you want to delete this message?')) return;
+    setDeletingMessageId(messageId);
+    try {
+      await deleteDirectMessage({
+        userId: user.id,
+        peerId: activeUserId.trim(),
+        messageId
+      });
+      setMessages((prev) => prev.filter((item) => item._id !== messageId));
+    } catch {
+      /* ignore */
+    } finally {
+      setDeletingMessageId('');
+    }
   };
 
   const peerShort =
@@ -318,10 +345,22 @@ export default function ChatDashboardPage() {
                           : 'border-amber-200/70 bg-white/70 hover:bg-amber-50 dark:border-navy-700/50 dark:bg-navy-950/40 dark:hover:bg-navy-900/50'
                       )}
                     >
-                      <p className="truncate text-sm font-semibold text-amber-950 dark:text-slate-100">{chat.peerUsername}</p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate text-sm font-semibold text-amber-950 dark:text-slate-100">{chat.peerUsername}</p>
+                        {activeUserId.trim() !== chat.peerId && Number(chat.unreadCount || 0) > 0 && (
+                          <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white dark:bg-sky-500">
+                            {chat.unreadCount > 99 ? '99+' : chat.unreadCount}
+                          </span>
+                        )}
+                      </div>
                       <p className="mt-0.5 truncate text-xs text-amber-700/90 dark:text-slate-300/90">
                         {chat.lastMessage || 'Message'}
                       </p>
+                      {activeUserId.trim() !== chat.peerId && Number(chat.unreadCount || 0) > 0 && (
+                        <p className="mt-1 text-[11px] font-semibold text-amber-700 dark:text-sky-400">
+                          {chat.unreadCount} unread {chat.unreadCount === 1 ? 'message' : 'messages'}
+                        </p>
+                      )}
                     </button>
                   ))
                 )}
@@ -396,15 +435,13 @@ export default function ChatDashboardPage() {
                 {activeUserId.trim() && user?.id ? (
                   <>
                     <Button asChild size="sm" variant="secondary">
-                      <Link href={`/call?callee=${encodeURIComponent(activeUserId.trim())}`}>
+                      <Link href={`/call?callee=${encodeURIComponent(activeUserId.trim())}&mode=audio`}>
                         <Phone className="mr-1.5 h-4 w-4" />
                         Voice
                       </Link>
                     </Button>
                     <Button asChild size="sm" variant="secondary">
-                      <Link
-                        href={`/video-call?room=${encodeURIComponent(dmVideoRoomId(user.id, activeUserId.trim()))}`}
-                      >
+                      <Link href={`/video-call?callee=${encodeURIComponent(activeUserId.trim())}&mode=video`}>
                         <Video className="mr-1.5 h-4 w-4" />
                         Video
                       </Link>
@@ -446,13 +483,27 @@ export default function ChatDashboardPage() {
                           : 'rounded-bl-md border border-amber-200/80 bg-white text-amber-950 dark:border-navy-700/60 dark:bg-navy-950/80 dark:text-slate-50'
                       )}
                     >
-                      <div
-                        className={cn(
-                          'text-[11px] font-semibold tracking-wide',
-                          mine ? 'text-amber-100/95' : 'text-amber-600 dark:text-sky-400'
+                      <div className="flex items-center justify-between gap-2">
+                        <div
+                          className={cn(
+                            'text-[11px] font-semibold tracking-wide',
+                            mine ? 'text-amber-100/95' : 'text-amber-600 dark:text-sky-400'
+                          )}
+                        >
+                          {senderLabel}
+                        </div>
+                        {mine && (
+                          <button
+                            type="button"
+                            className="rounded-md p-1 text-amber-100/90 transition hover:bg-white/20 hover:text-white"
+                            onClick={() => handleDeleteMessage(m._id)}
+                            disabled={deletingMessageId === m._id}
+                            aria-label="Delete message"
+                            title="Delete message"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
                         )}
-                      >
-                        {senderLabel}
                       </div>
                       <p className={cn('mt-1 leading-relaxed', mine ? 'text-white' : 'text-amber-950 dark:text-slate-50')}>
                         {m.content}
