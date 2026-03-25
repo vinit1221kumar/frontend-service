@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuthContext } from "@/context/AuthContext";
+import { searchUsersByUsername } from "@/services/firebaseChat";
 import {
   acceptCall,
   clearIceCandidates,
@@ -133,6 +134,10 @@ export default function CallUI({
   const initialMode = queryMode === "audio" || queryMode === "video" ? queryMode : defaultMode;
 
   const [calleeId, setCalleeId] = useState(calleeParam);
+  const [calleeUsername, setCalleeUsername] = useState<string>("");
+  const [userQuery, setUserQuery] = useState("");
+  const [userResults, setUserResults] = useState<{ id: string; username: string }[]>([]);
+  const [userLoading, setUserLoading] = useState(false);
   const [peerId, setPeerId] = useState<string | null>(null);
   const [callMode, setCallMode] = useState<CallMode>(initialMode);
   const [incomingOffer, setIncomingOffer] = useState<OfferPayload | null>(null);
@@ -146,6 +151,39 @@ export default function CallUI({
   useEffect(() => {
     setCalleeId(calleeParam);
   }, [calleeParam]);
+
+  useEffect(() => {
+    if (!currentUserId) return;
+    const term = userQuery.trim();
+    if (!term) {
+      setUserResults([]);
+      setUserLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setUserLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const results = await searchUsersByUsername(term, currentUserId);
+        if (!cancelled) setUserResults(results);
+      } catch {
+        if (!cancelled) setUserResults([]);
+      } finally {
+        if (!cancelled) setUserLoading(false);
+      }
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [currentUserId, userQuery]);
+
+  useEffect(() => {
+    // If user types/changes calleeId manually, clear the username label.
+    setCalleeUsername("");
+  }, [calleeId]);
 
   useEffect(() => {
     setCallMode(initialMode);
@@ -586,15 +624,60 @@ export default function CallUI({
             : "rounded-lg border border-slate-200 p-4 dark:border-navy-700"
         )}
       >
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Callee ID</span>
+        <div className="flex flex-col gap-2">
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Select user (username)</span>
           <input
-            value={calleeId}
-            onChange={(event) => setCalleeId(event.target.value)}
-            placeholder="Enter callee user ID"
+            value={userQuery}
+            onChange={(event) => setUserQuery(event.target.value)}
+            placeholder="Search by username"
             className={fieldClassName}
           />
-        </label>
+          <div className="rounded-2xl border border-amber-200/60 bg-amber-50/70 p-2 dark:border-navy-700/50 dark:bg-navy-900/50">
+            {userLoading ? (
+              <div className="px-2 py-1 text-xs text-amber-800/80 dark:text-slate-300/80">Searching…</div>
+            ) : userResults.length === 0 ? (
+              <div className="px-2 py-1 text-xs text-amber-800/70 dark:text-slate-300/75">No matches.</div>
+            ) : (
+              <div className="max-h-40 overflow-y-auto">
+                {userResults.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    className="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-amber-950 hover:bg-amber-100/80 dark:text-slate-50 dark:hover:bg-navy-800/60"
+                    onClick={() => {
+                      setCalleeId(u.id);
+                      setCalleeUsername(u.username);
+                      setUserQuery(u.username);
+                      setUserResults([]);
+                    }}
+                  >
+                    <span className="truncate">{u.username}</span>
+                    <span className="font-mono text-[11px] opacity-60">{u.id.slice(0, 6)}…</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="text-xs text-slate-600 dark:text-slate-300">
+            Selected:{" "}
+            <span className="font-semibold text-amber-950 dark:text-slate-50">
+              {calleeUsername || (calleeId ? "User selected" : "None")}
+            </span>
+          </div>
+
+          <details className="mt-1">
+            <summary className="cursor-pointer text-xs font-semibold text-amber-800/80 dark:text-slate-300/80">
+              Advanced: enter callee ID
+            </summary>
+            <input
+              value={calleeId}
+              onChange={(event) => setCalleeId(event.target.value)}
+              placeholder="Enter callee user ID"
+              className={cn(fieldClassName, "mt-2")}
+            />
+          </details>
+        </div>
         <label className="flex flex-col gap-2">
           <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Call mode</span>
           <select

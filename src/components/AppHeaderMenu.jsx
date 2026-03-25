@@ -34,9 +34,16 @@ export function AppHeaderMenu({ showHomeButton = true, menuLinks = [], showLogou
     <div className="flex items-center gap-1.5">
       <ThemeToggle />
       {showHomeButton && (
-        <Button asChild variant="ghost" size="icon" className="rounded-full" title="Home" aria-label="Home">
+        <Button
+          asChild
+          variant="ghost"
+          size="icon"
+          className="rounded-full p-0 hover:bg-transparent focus-visible:ring-2 focus-visible:ring-amber-500/55 dark:focus-visible:ring-sky-400/45"
+          title="Home"
+          aria-label="Home"
+        >
           <Link href="/" onClick={() => setMenuOpen(false)}>
-            <AppLogo variant="mark" className="h-5 w-5" />
+            <AppLogo variant="mark" className="h-9 w-9" />
           </Link>
         </Button>
       )}
