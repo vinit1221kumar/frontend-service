@@ -132,22 +132,15 @@ export default function CallUI({
   const ringtoneRef = useRef(createRingtonePlayer());
 
   const calleeParam = searchParams.get("callee")?.trim() ?? "";
-  const calleeNameParam = searchParams.get("calleeName")?.trim() ?? "";
   const queryMode = searchParams.get("mode");
   const initialMode = queryMode === "audio" || queryMode === "video" ? queryMode : defaultMode;
   const callModeRef = useRef<CallMode>(initialMode);
 
   const [calleeId, setCalleeId] = useState(calleeParam);
-<<<<<<< HEAD
   const [calleeUsername, setCalleeUsername] = useState<string>("");
   const [userQuery, setUserQuery] = useState("");
   const [userResults, setUserResults] = useState<{ id: string; username: string }[]>([]);
   const [userLoading, setUserLoading] = useState(false);
-=======
-  const [calleeInput, setCalleeInput] = useState(calleeNameParam || (calleeParam ? "Selected user" : ""));
-  const [searchResults, setSearchResults] = useState<Array<{ id: string; username: string }>>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
->>>>>>> a5e9db6 (vvv)
   const [peerId, setPeerId] = useState<string | null>(null);
   const [callMode, setCallMode] = useState<CallMode>(initialMode);
   const [incomingOffer, setIncomingOffer] = useState<OfferPayload | null>(null);
@@ -160,8 +153,7 @@ export default function CallUI({
 
   useEffect(() => {
     setCalleeId(calleeParam);
-    setCalleeInput(calleeNameParam || (calleeParam ? "Selected user" : ""));
-  }, [calleeNameParam, calleeParam]);
+  }, [calleeParam]);
 
   useEffect(() => {
     if (!currentUserId) return;
@@ -199,46 +191,6 @@ export default function CallUI({
   useEffect(() => {
     setCallMode(initialMode);
   }, [initialMode]);
-
-  useEffect(() => {
-    if (!currentUserId) {
-      setSearchResults([]);
-      setSearchLoading(false);
-      return;
-    }
-
-    const query = calleeInput.trim();
-    if (!query || !!calleeId) {
-      setSearchResults([]);
-      setSearchLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    const handle = async () => {
-      setSearchLoading(true);
-      try {
-        const users = await searchUsersByUsername(query, currentUserId);
-        if (!cancelled) {
-          setSearchResults(users);
-        }
-      } catch {
-        if (!cancelled) {
-          setSearchResults([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setSearchLoading(false);
-        }
-      }
-    };
-
-    const timeout = setTimeout(handle, 220);
-    return () => {
-      cancelled = true;
-      clearTimeout(timeout);
-    };
-  }, [calleeId, calleeInput, currentUserId]);
 
   useEffect(() => {
     callModeRef.current = callMode;
@@ -672,7 +624,6 @@ export default function CallUI({
             : "rounded-lg border border-slate-200 p-4 dark:border-navy-700"
         )}
       >
-<<<<<<< HEAD
         <div className="flex flex-col gap-2">
           <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Select user (username)</span>
           <input
@@ -727,47 +678,6 @@ export default function CallUI({
             />
           </details>
         </div>
-=======
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-slate-700 dark:text-slate-200">User</span>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              value={calleeInput}
-              onChange={(event) => {
-                setCalleeInput(event.target.value);
-                setCalleeId("");
-                setError(null);
-              }}
-              placeholder="Search username"
-              className={cn(fieldClassName, "pl-9")}
-            />
-            {(searchLoading || searchResults.length > 0) && !hasSelectedCallee && calleeInput.trim() ? (
-              <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-amber-200/80 bg-white shadow-lg dark:border-navy-700/60 dark:bg-navy-950">
-                {searchLoading ? (
-                  <div className="px-3 py-2 text-sm text-slate-500 dark:text-slate-300">Searching…</div>
-                ) : (
-                  searchResults.map((result) => (
-                    <button
-                      key={result.id}
-                      type="button"
-                      onClick={() => {
-                        setCalleeId(result.id);
-                        setCalleeInput(result.username);
-                        setSearchResults([]);
-                        setError(null);
-                      }}
-                      className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-amber-50 dark:text-slate-100 dark:hover:bg-navy-900/60"
-                    >
-                      {result.username}
-                    </button>
-                  ))
-                )}
-              </div>
-            ) : null}
-          </div>
-        </label>
->>>>>>> a5e9db6 (vvv)
         <label className="flex flex-col gap-2">
           <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Call mode</span>
           <select

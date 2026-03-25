@@ -25,10 +25,12 @@ import { motion } from 'framer-motion';
 import {
   Loader2,
   Lock,
+  Archive,
   MessageCircle,
   Phone,
   MoreVertical,
   Pencil,
+  Paperclip,
   Search,
   Send,
   Sparkles,

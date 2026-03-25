@@ -469,7 +469,6 @@ export default function GroupChatPage() {
               </div>
             )}
 
-<<<<<<< HEAD
             {messages.map((m, idx) => {
               const sender = groupMembers.find((member) => member.id === m.senderId);
               const senderLabel = sender?.username || m.senderId;
@@ -500,42 +499,37 @@ export default function GroupChatPage() {
                 </motion.div>
               );
             })}
-=======
-            {messages.map((m, idx) => (
-              (() => {
-                const senderName = m.senderId === user?.id
-                  ? user?.username || 'You'
-                  : senderNamesById[m.senderId] || 'Group member';
+            {messages.map((m, idx) => {
+              const senderName =
+                m.senderId === user?.id ? user?.username || 'You' : senderNamesById[m.senderId] || 'Group member';
 
-                return (
-                  <motion.div
-                    key={m._id || idx}
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-xs text-slate-500 dark:text-slate-400">{senderName}</div>
-                      {m.senderId === user?.id && (
-                        <button
-                          type="button"
-                          className="rounded-md p-1 text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-slate-100"
-                          onClick={() => handleDeleteGroupMessage(m._id)}
-                          disabled={deletingMessageId === m._id}
-                          aria-label="Delete message"
-                          title="Delete message"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-                    <div className="mt-1 text-slate-900 dark:text-slate-100">{m.message}</div>
-                  </motion.div>
-                );
-              })()
-            ))}
->>>>>>> a5e9db6 (vvv)
+              return (
+                <motion.div
+                  key={m._id || idx}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium text-slate-600 dark:text-slate-300">{senderName}</div>
+                    {m.senderId === user?.id && (
+                      <button
+                        type="button"
+                        className="rounded-md p-1 text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-slate-100"
+                        onClick={() => handleDeleteGroupMessage(m._id)}
+                        disabled={deletingMessageId === m._id}
+                        aria-label="Delete message"
+                        title="Delete message"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="mt-1 text-slate-900 dark:text-slate-100">{m.message}</div>
+                </motion.div>
+              );
+            })}
             {messages.length === 0 && (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-300">
                 No messages yet. Set a groupId and send a message.
