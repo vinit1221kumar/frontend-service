@@ -18,7 +18,6 @@ import {
 } from '../services/firebaseChat';
 import { motion } from 'framer-motion';
 import {
-  ArrowLeft,
   Loader2,
   MessageCircle,
   Phone,
@@ -590,15 +589,37 @@ export default function ChatDashboardPage() {
                     <MessageCircle className="mx-auto h-10 w-10 text-amber-400 dark:text-sky-500" />
                     <p className="mt-3 text-sm font-medium text-amber-900 dark:text-slate-100">No messages yet</p>
                     <p className="mt-1 max-w-sm text-xs text-amber-800/80 dark:text-slate-300/80">
-                      Open search in Chats, pick someone by username, then say hello — replies show live when they&apos;re
-                      online.
+                      Start with a quick greeting. (Tip: choose a chat first.)
                     </p>
-                    <Button asChild variant="secondary" size="sm" className="mt-4">
-                      <Link href="/">
-                        <ArrowLeft className="mr-1.5 h-4 w-4" />
-                        Back to landing
-                      </Link>
-                    </Button>
+                    <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        disabled={!activeUserId.trim()}
+                        onClick={() => setInput('hi')}
+                      >
+                        Hi
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        disabled={!activeUserId.trim()}
+                        onClick={() => setInput('hello')}
+                      >
+                        Hello
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        disabled={!activeUserId.trim()}
+                        onClick={() => setInput('namaste')}
+                      >
+                        Namaste
+                      </Button>
+                    </div>
                   </div>
                 </div>
               )}

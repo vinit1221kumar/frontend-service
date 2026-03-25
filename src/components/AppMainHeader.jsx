@@ -1,8 +1,6 @@
 'use client';
 
-import Link from 'next/link';
 import { AppHeaderMenu } from '@/components/AppHeaderMenu';
-import { AppLogo } from '@/components/AppLogo';
 import { AppNavIcons } from '@/components/AppNavIcons';
 import { ProfileMenu } from '@/components/ProfileMenu';
 
@@ -13,13 +11,6 @@ export function AppMainHeader() {
   return (
     <header className="z-20 shrink-0 border-b border-amber-200/60 bg-white/75 backdrop-blur-xl dark:border-navy-800/40 dark:bg-navy-950/80">
       <div className="flex w-full flex-wrap items-center gap-2 px-3 py-2.5 sm:gap-3 sm:px-5 sm:py-3">
-        <Link
-          href="/"
-          className="shrink-0 no-underline hover:opacity-90"
-          aria-label="D-Lite home"
-        >
-          <AppLogo variant="mark" />
-        </Link>
         <ProfileMenu />
 
         <div className="min-w-0 flex-1">

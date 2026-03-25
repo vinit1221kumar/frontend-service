@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Home, LogOut, MoreVertical } from 'lucide-react';
+import { LogOut, MoreVertical } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { useAuth } from '@/hooks/useAuth';
+import { AppLogo } from '@/components/AppLogo';
 
 /**
  * Theme toggle + round Home icon + ⋮ menu (Instagram-style).
@@ -35,7 +36,7 @@ export function AppHeaderMenu({ showHomeButton = true, menuLinks = [], showLogou
       {showHomeButton && (
         <Button asChild variant="ghost" size="icon" className="rounded-full" title="Home" aria-label="Home">
           <Link href="/" onClick={() => setMenuOpen(false)}>
-            <Home className="h-5 w-5" />
+            <AppLogo variant="mark" className="h-5 w-5" />
           </Link>
         </Button>
       )}

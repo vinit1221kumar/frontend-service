@@ -67,11 +67,13 @@ export default function LandingPage() {
           <AppBrandRow asHomeLink />
 
           <nav className="hidden items-center gap-1 sm:flex">
-            <Button asChild className={dashboardCtaClass(true)}>
-              <Link href="/dashboard" className="inline-flex items-center no-underline">
-                <DashboardCtaContent compact showArrow={false} />
-              </Link>
-            </Button>
+            {isAuthenticated && (
+              <Button asChild className={dashboardCtaClass(true)}>
+                <Link href="/dashboard" className="inline-flex items-center no-underline">
+                  <DashboardCtaContent compact showArrow={false} />
+                </Link>
+              </Button>
+            )}
             <Button asChild variant="ghost" size="sm">
               <a href="#features" className="no-underline">
                 Features
@@ -86,11 +88,13 @@ export default function LandingPage() {
 
           <div className="flex shrink-0 items-center gap-2">
             {/* Mobile: same CTA as hero (nav hidden below sm) */}
-            <Button asChild className={cn(dashboardCtaClass(true), 'sm:hidden')}>
-              <Link href="/dashboard" className="inline-flex items-center no-underline">
-                <DashboardCtaContent compact showArrow={false} />
-              </Link>
-            </Button>
+            {isAuthenticated && (
+              <Button asChild className={cn(dashboardCtaClass(true), 'sm:hidden')}>
+                <Link href="/dashboard" className="inline-flex items-center no-underline">
+                  <DashboardCtaContent compact showArrow={false} />
+                </Link>
+              </Button>
+            )}
             {isAuthenticated ? (
               <>
                 <span className="hidden text-sm text-slate-600 dark:text-slate-300 md:inline">
@@ -459,11 +463,13 @@ export default function LandingPage() {
                     Features
                   </a>
                 </li>
-                <li>
-                  <Link href="/dashboard" className="no-underline hover:text-slate-900 dark:hover:text-slate-200">
-                    Dashboard
-                  </Link>
-                </li>
+                {isAuthenticated && (
+                  <li>
+                    <Link href="/dashboard" className="no-underline hover:text-slate-900 dark:hover:text-slate-200">
+                      Dashboard
+                    </Link>
+                  </li>
+                )}
               </ul>
             </div>
             <div>
