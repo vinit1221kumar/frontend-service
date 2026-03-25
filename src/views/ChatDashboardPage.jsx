@@ -881,6 +881,24 @@ export default function ChatDashboardPage() {
                           className="mt-2 max-h-72 w-full rounded-xl bg-black"
                         />
                       ) : null}
+                      {m.mediaType === 'file' && m.mediaUrl ? (
+                        <a
+                          href={m.mediaUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={cn(
+                            'mt-2 block rounded-xl border px-3 py-2 text-sm no-underline transition hover:brightness-[1.02]',
+                            mine
+                              ? 'border-white/25 bg-white/10 text-white hover:bg-white/15'
+                              : 'border-amber-200/80 bg-white text-amber-950 hover:bg-amber-50 dark:border-navy-700/60 dark:bg-navy-950/70 dark:text-slate-50 dark:hover:bg-navy-900/60'
+                          )}
+                        >
+                          <div className="truncate font-semibold">{m.fileName || 'Download file'}</div>
+                          <div className={cn('mt-0.5 text-xs opacity-80', mine ? 'text-amber-100/90' : '')}>
+                            Open / download
+                          </div>
+                        </a>
+                      ) : null}
                       {(m.content || m.isDeleted) ? (
                         <p
                           className={cn(
@@ -952,7 +970,7 @@ export default function ChatDashboardPage() {
               <input
                 ref={mediaInputRef}
                 type="file"
-                accept="image/*,video/*"
+                accept="*/*"
                 className="hidden"
                 onChange={handleSelectMedia}
               />
@@ -963,8 +981,8 @@ export default function ChatDashboardPage() {
                 className="h-10 w-10 shrink-0"
                 disabled={!activeUserId.trim() || sendingMessage}
                 onClick={() => mediaInputRef.current?.click()}
-                title="Share image or video"
-                aria-label="Share image or video"
+                title="Share photo, video, or file"
+                aria-label="Share photo, video, or file"
               >
                 <Paperclip className="h-4 w-4" />
               </Button>

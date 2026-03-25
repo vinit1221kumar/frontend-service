@@ -32,6 +32,8 @@ function mapDmMessage(id, value) {
     mediaUrl: value.mediaUrl || '',
     mediaType: value.mediaType || '',
     fileName: value.fileName || '',
+    fileSize: Number(value.fileSize || 0),
+    contentType: value.contentType || '',
     createdAt: value.createdAt || Date.now(),
     updatedAt: value.updatedAt || null,
     isDeleted: Boolean(value.isDeleted),
@@ -456,9 +458,7 @@ export async function sendDirectMedia({ senderId, receiverId, file }) {
 
   const isImage = file.type.startsWith('image/');
   const isVideo = file.type.startsWith('video/');
-  if (!isImage && !isVideo) {
-    throw new Error('Only images and videos are supported.');
-  }
+  const mediaType = isImage ? 'image' : isVideo ? 'video' : 'file';
 
   const realtimeDb = getRealtimeDb();
   const storage = getFirebaseStorage();
@@ -474,7 +474,6 @@ export async function sendDirectMedia({ senderId, receiverId, file }) {
 
   await uploadBytes(mediaRef, file, { contentType: file.type || undefined });
   const mediaUrl = await getDownloadURL(mediaRef);
-  const mediaType = isImage ? 'image' : 'video';
 
   await set(node, {
     senderId,
@@ -483,6 +482,8 @@ export async function sendDirectMedia({ senderId, receiverId, file }) {
     mediaUrl,
     mediaType,
     fileName: file.name || '',
+    fileSize: Number(file.size || 0),
+    contentType: file.type || '',
     createdAt: now
   });
 
@@ -490,14 +491,16 @@ export async function sendDirectMedia({ senderId, receiverId, file }) {
     await update(ref(realtimeDb), {
       [`recentDirectChats/${senderId}/${threadId}`]: {
         peerId: receiverId,
-        lastMessage: mediaType === 'image' ? 'Photo' : 'Video',
+        lastMessage:
+          mediaType === 'image' ? 'Photo' : mediaType === 'video' ? 'Video' : `File${file.name ? `: ${file.name}` : ''}`,
         lastSenderId: senderId,
         updatedAt: now,
         unreadCount: 0
       },
       [`recentDirectChats/${receiverId}/${threadId}`]: {
         peerId: senderId,
-        lastMessage: mediaType === 'image' ? 'Photo' : 'Video',
+        lastMessage:
+          mediaType === 'image' ? 'Photo' : mediaType === 'video' ? 'Video' : `File${file.name ? `: ${file.name}` : ''}`,
         lastSenderId: senderId,
         updatedAt: now
       }
