@@ -285,7 +285,11 @@ export default function ChatDashboardPage() {
 
   const handleDeleteMessage = async (messageId) => {
     if (!messageId || !user?.id || !activeUserId.trim()) return;
-    if (typeof window !== 'undefined' && !window.confirm('Are you sure you want to delete this message?')) return;
+    if (
+      typeof window !== 'undefined' &&
+      !window.confirm('Delete this message? It will also be deleted for the other user.')
+    )
+      return;
     setDeletingMessageId(messageId);
     setActionError('');
     try {
@@ -613,12 +617,61 @@ export default function ChatDashboardPage() {
                   >
                     <div
                       className={cn(
-                        'max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm shadow-sm sm:max-w-[70%]',
+                        'relative max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm shadow-sm sm:max-w-[70%]',
                         mine
                           ? 'rounded-br-md border border-amber-400/50 bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-amber-600/25'
                           : 'rounded-bl-md border border-amber-200/80 bg-white text-amber-950 dark:border-navy-700/60 dark:bg-navy-950/80 dark:text-slate-50'
                       )}
                     >
+                      {mine && (
+                        <div className="absolute left-1 top-1 z-10" data-message-menu>
+                          <button
+                            type="button"
+                            className="rounded-md p-1.5 text-amber-50/95 transition hover:bg-white/15 hover:text-white"
+                            onClick={() => setOpenMessageMenuId((prev) => (prev === m._id ? null : m._id))}
+                            aria-label="Message actions"
+                            title="Message actions"
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </button>
+
+                          {openMessageMenuId === m._id && (
+                            <div
+                              role="menu"
+                              className="anim-pop absolute left-0 top-full z-50 mt-1.5 min-w-[170px] overflow-hidden rounded-2xl border border-amber-200/90 bg-white py-1.5 shadow-xl shadow-amber-900/10 dark:border-navy-700/60 dark:bg-navy-950"
+                            >
+                              <button
+                                type="button"
+                                role="menuitem"
+                                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-amber-950 transition-colors duration-150 hover:bg-amber-100 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-50 dark:hover:bg-navy-800/60"
+                                onClick={() => handleEditMessage(m)}
+                                disabled={!canEditDelete}
+                                title={canEditDelete ? 'Edit message' : 'Edit only available for 15 minutes'}
+                              >
+                                <Pencil className="h-4 w-4 shrink-0 opacity-80" />
+                                Edit message
+                              </button>
+
+                              <button
+                                type="button"
+                                role="menuitem"
+                                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-700 transition-colors duration-150 hover:bg-red-50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60 dark:text-red-400 dark:hover:bg-red-950/50"
+                                onClick={() => {
+                                  if (!canEditDelete) return;
+                                  setOpenMessageMenuId(null);
+                                  handleDeleteMessage(m._id);
+                                }}
+                                disabled={!canEditDelete || deletingMessageId === m._id}
+                                title={canEditDelete ? 'Delete message' : 'Delete only available for 15 minutes'}
+                              >
+                                <Trash2 className="h-4 w-4 shrink-0" />
+                                {deletingMessageId === m._id ? 'Deleting…' : 'Delete message'}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       <div className="flex items-center justify-between gap-2">
                         <div
                           className={cn(
@@ -628,54 +681,6 @@ export default function ChatDashboardPage() {
                         >
                           {senderLabel}
                         </div>
-                        {mine && (
-                          <div className="relative" data-message-menu>
-                            <button
-                              type="button"
-                              className="rounded-md p-1.5 text-[11px] font-semibold text-amber-50 transition hover:bg-white/15 hover:text-white"
-                              onClick={() => setOpenMessageMenuId((prev) => (prev === m._id ? null : m._id))}
-                              aria-label="Message actions"
-                              title="Message actions"
-                            >
-                              <MoreVertical className="h-4 w-4" />
-                            </button>
-
-                            {openMessageMenuId === m._id && (
-                              <div
-                                role="menu"
-                                className="absolute right-0 top-full z-50 mt-1.5 min-w-[170px] overflow-hidden rounded-2xl border border-amber-200/90 bg-white py-1.5 shadow-xl shadow-amber-900/10 dark:border-navy-700/60 dark:bg-navy-950"
-                              >
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-amber-950 transition-colors duration-150 hover:bg-amber-100 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-50 dark:hover:bg-navy-800/60"
-                                  onClick={() => handleEditMessage(m)}
-                                  disabled={!canEditDelete}
-                                  title={canEditDelete ? 'Edit message' : 'Edit only available for 15 minutes'}
-                                >
-                                  <Pencil className="h-4 w-4 shrink-0 opacity-80" />
-                                  Edit
-                                </button>
-
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-700 transition-colors duration-150 hover:bg-red-50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60 dark:text-red-400 dark:hover:bg-red-950/50"
-                                  onClick={() => {
-                                    if (!canEditDelete) return;
-                                    setOpenMessageMenuId(null);
-                                    handleDeleteMessage(m._id);
-                                  }}
-                                  disabled={!canEditDelete || deletingMessageId === m._id}
-                                  title={canEditDelete ? 'Delete message' : 'Delete only available for 15 minutes'}
-                                >
-                                  <Trash2 className="h-4 w-4 shrink-0" />
-                                  {deletingMessageId === m._id ? 'Deleting…' : 'Delete'}
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        )}
                       </div>
                       <p className={cn('mt-1 leading-relaxed', mine ? 'text-white' : 'text-amber-950 dark:text-slate-50')}>
                         {m.content}
