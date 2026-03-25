@@ -2,19 +2,18 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { MessageSquare, Phone, Users, Video } from 'lucide-react';
+import { MessageSquare, Phone, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
 const items = [
   { href: '/dashboard', label: 'Chat', caption: 'Messages', icon: MessageSquare },
   { href: '/groups', label: 'Groups', caption: 'Groups', icon: Users },
-  { href: '/call', label: 'Calls', caption: 'Calls', icon: Phone },
-  { href: '/video-call', label: 'Video', caption: 'Video', icon: Video }
+  { href: '/call', label: 'Calls', caption: 'Calls', icon: Phone }
 ];
 
 /**
- * Horizontal icon nav (Chat, Groups, Calls, Video). Optional captions under icons.
+ * Horizontal icon nav (Chat, Groups, Calls). Optional captions under icons.
  */
 export function AppNavIcons({ className, showLabels = false }) {
   const pathname = usePathname();

@@ -10,6 +10,7 @@ import {
   PhoneIncoming,
   PhoneOff,
   Radio,
+  Search,
   UserRound,
   Video,
   VideoOff,
@@ -110,7 +111,7 @@ function getStatusLabel(status: ConnectionStatus) {
 export default function CallUI({
   defaultMode = "video",
   title = "Direct voice and video calls",
-  description = "Call another signed-in user by their user ID. The receiver can accept or reject from the same page.",
+  description = "Call another signed-in user. The receiver can accept or reject from the same page.",
   theme = "default",
 }: CallUIProps) {
   const auth = useAuthContext();
@@ -122,22 +123,31 @@ export default function CallUI({
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const currentUserIdRef = useRef<string | undefined>(currentUserId);
+  const peerIdRef = useRef<string | null>(null);
   const pendingIceCandidatesRef = useRef<Parameters<typeof addIceCandidate>[1][]>([]);
   const remoteDescriptionSetRef = useRef(false);
-  const incomingMediaPromiseRef = useRef<Promise<MediaStream> | null>(null);
   const sessionUnsubRefs = useRef<UnsubscribeFn[]>([]);
   const incomingCallUnsubRef = useRef<UnsubscribeFn | null>(null);
   const ringtoneRef = useRef(createRingtonePlayer());
 
   const calleeParam = searchParams.get("callee")?.trim() ?? "";
+  const calleeNameParam = searchParams.get("calleeName")?.trim() ?? "";
   const queryMode = searchParams.get("mode");
   const initialMode = queryMode === "audio" || queryMode === "video" ? queryMode : defaultMode;
+  const callModeRef = useRef<CallMode>(initialMode);
 
   const [calleeId, setCalleeId] = useState(calleeParam);
+<<<<<<< HEAD
   const [calleeUsername, setCalleeUsername] = useState<string>("");
   const [userQuery, setUserQuery] = useState("");
   const [userResults, setUserResults] = useState<{ id: string; username: string }[]>([]);
   const [userLoading, setUserLoading] = useState(false);
+=======
+  const [calleeInput, setCalleeInput] = useState(calleeNameParam || (calleeParam ? "Selected user" : ""));
+  const [searchResults, setSearchResults] = useState<Array<{ id: string; username: string }>>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+>>>>>>> a5e9db6 (vvv)
   const [peerId, setPeerId] = useState<string | null>(null);
   const [callMode, setCallMode] = useState<CallMode>(initialMode);
   const [incomingOffer, setIncomingOffer] = useState<OfferPayload | null>(null);
@@ -150,7 +160,8 @@ export default function CallUI({
 
   useEffect(() => {
     setCalleeId(calleeParam);
-  }, [calleeParam]);
+    setCalleeInput(calleeNameParam || (calleeParam ? "Selected user" : ""));
+  }, [calleeNameParam, calleeParam]);
 
   useEffect(() => {
     if (!currentUserId) return;
@@ -189,6 +200,58 @@ export default function CallUI({
     setCallMode(initialMode);
   }, [initialMode]);
 
+  useEffect(() => {
+    if (!currentUserId) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+
+    const query = calleeInput.trim();
+    if (!query || !!calleeId) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const handle = async () => {
+      setSearchLoading(true);
+      try {
+        const users = await searchUsersByUsername(query, currentUserId);
+        if (!cancelled) {
+          setSearchResults(users);
+        }
+      } catch {
+        if (!cancelled) {
+          setSearchResults([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setSearchLoading(false);
+        }
+      }
+    };
+
+    const timeout = setTimeout(handle, 220);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [calleeId, calleeInput, currentUserId]);
+
+  useEffect(() => {
+    callModeRef.current = callMode;
+  }, [callMode]);
+
+  useEffect(() => {
+    currentUserIdRef.current = currentUserId;
+  }, [currentUserId]);
+
+  useEffect(() => {
+    peerIdRef.current = peerId;
+  }, [peerId]);
+
   const clearSessionListeners = useCallback(() => {
     sessionUnsubRefs.current.forEach((unsubscribe) => unsubscribe());
     sessionUnsubRefs.current = [];
@@ -211,8 +274,8 @@ export default function CallUI({
     setPeerId(null);
     setConnectionState("new");
     setMicEnabled(true);
-    setCameraEnabled(callMode === "video");
-  }, [callMode]);
+    setCameraEnabled(callModeRef.current === "video");
+  }, []);
 
   const hardCleanup = useCallback(async () => {
     ringtoneRef.current.stop();
@@ -221,7 +284,6 @@ export default function CallUI({
     peerConnectionRef.current = null;
     pendingIceCandidatesRef.current = [];
     remoteDescriptionSetRef.current = false;
-    incomingMediaPromiseRef.current = null;
     stopAllTracks();
     clearMediaElements();
     resetLocalState();
@@ -336,19 +398,6 @@ export default function CallUI({
     sessionUnsubRefs.current.push(unsubscribe);
   }, []);
 
-  const ensureIncomingMedia = useCallback(
-    async (mode: CallMode) => {
-      if (localStreamRef.current) return localStreamRef.current;
-      if (!incomingMediaPromiseRef.current) {
-        incomingMediaPromiseRef.current = setupMedia(mode).finally(() => {
-          incomingMediaPromiseRef.current = null;
-        });
-      }
-      return incomingMediaPromiseRef.current;
-    },
-    [setupMedia]
-  );
-
   const beginCall = useCallback(async () => {
     if (!currentUserId) {
       setError("You must be logged in to start a call.");
@@ -357,7 +406,7 @@ export default function CallUI({
 
     const targetUserId = calleeId.trim();
     if (!targetUserId) {
-      setError("Enter a callee ID.");
+      setError("Choose a user to call.");
       return;
     }
     if (targetUserId === currentUserId) {
@@ -535,26 +584,28 @@ export default function CallUI({
         return "ringing";
       });
       ringtoneRef.current.start();
-      ensureIncomingMedia(offer.mode).catch((mediaError) => {
-        console.error("Failed to prepare local media for incoming call", mediaError);
-        setError(mediaError instanceof Error ? mediaError.message : "Could not prepare local media.");
-      });
     });
 
     incomingCallUnsubRef.current = unsubscribeIncoming;
 
     return () => {
+      const activeUserId = currentUserIdRef.current;
+      const activePeerId = peerIdRef.current;
       incomingCallUnsubRef.current?.();
       incomingCallUnsubRef.current = null;
+      if (activeUserId) {
+        endCall({ userId: activeUserId, peerUserId: activePeerId }).catch(() => undefined);
+      }
       hardCleanup().catch(() => undefined);
     };
-  }, [currentUserId, ensureIncomingMedia, hardCleanup]);
+  }, [currentUserId, hardCleanup]);
 
   const canToggleCamera = Boolean(localStreamRef.current?.getVideoTracks().length);
   const hasIncomingCall = Boolean(incomingOffer);
   const activeMode = incomingOffer?.mode ?? callMode;
   const isEnhanced = theme === "enhanced";
   const isVideoMode = activeMode === "video";
+  const hasSelectedCallee = Boolean(calleeId.trim());
   const heroIcon = isVideoMode ? Video : PhoneCall;
   const HeroIcon = heroIcon;
   const statusToneClass =
@@ -611,9 +662,6 @@ export default function CallUI({
             <p className="text-sm text-slate-600 dark:text-slate-300">{description}</p>
           </>
         )}
-        <p className="text-sm text-slate-600 dark:text-slate-300">
-          Your user ID: <span className="font-mono">{currentUserId ?? "Not signed in"}</span>
-        </p>
       </div>
 
       <div
@@ -624,6 +672,7 @@ export default function CallUI({
             : "rounded-lg border border-slate-200 p-4 dark:border-navy-700"
         )}
       >
+<<<<<<< HEAD
         <div className="flex flex-col gap-2">
           <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Select user (username)</span>
           <input
@@ -678,6 +727,47 @@ export default function CallUI({
             />
           </details>
         </div>
+=======
+        <label className="flex flex-col gap-2">
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-200">User</span>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              value={calleeInput}
+              onChange={(event) => {
+                setCalleeInput(event.target.value);
+                setCalleeId("");
+                setError(null);
+              }}
+              placeholder="Search username"
+              className={cn(fieldClassName, "pl-9")}
+            />
+            {(searchLoading || searchResults.length > 0) && !hasSelectedCallee && calleeInput.trim() ? (
+              <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-amber-200/80 bg-white shadow-lg dark:border-navy-700/60 dark:bg-navy-950">
+                {searchLoading ? (
+                  <div className="px-3 py-2 text-sm text-slate-500 dark:text-slate-300">Searching…</div>
+                ) : (
+                  searchResults.map((result) => (
+                    <button
+                      key={result.id}
+                      type="button"
+                      onClick={() => {
+                        setCalleeId(result.id);
+                        setCalleeInput(result.username);
+                        setSearchResults([]);
+                        setError(null);
+                      }}
+                      className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-amber-50 dark:text-slate-100 dark:hover:bg-navy-900/60"
+                    >
+                      {result.username}
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : null}
+          </div>
+        </label>
+>>>>>>> a5e9db6 (vvv)
         <label className="flex flex-col gap-2">
           <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Call mode</span>
           <select

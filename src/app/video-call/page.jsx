@@ -1,13 +1,25 @@
-import { Suspense } from 'react';
-import { PrivateRoute } from '@/components/PrivateRoute';
-import VideoCallPage from '@/views/VideoCallPage';
+import { redirect } from 'next/navigation';
 
-export default function VideoCall() {
-  return (
-    <PrivateRoute>
-      <Suspense fallback={<div className="p-8 text-center text-slate-600">Loading…</div>}>
-        <VideoCallPage />
-      </Suspense>
-    </PrivateRoute>
-  );
+export default async function VideoCall({ searchParams }) {
+  const resolvedSearchParams = await searchParams;
+  const params = new URLSearchParams();
+
+  Object.entries(resolvedSearchParams || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item != null) params.append(key, String(item));
+      });
+      return;
+    }
+    if (value != null) {
+      params.set(key, String(value));
+    }
+  });
+
+  if (!params.has('mode')) {
+    params.set('mode', 'video');
+  }
+
+  const query = params.toString();
+  redirect(query ? `/call?${query}` : '/call');
 }

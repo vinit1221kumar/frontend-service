@@ -1,3 +1,4 @@
++
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -11,7 +12,7 @@ import {
 
 const ICE_SERVERS = {
   iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun.l.google.com:19302' }, 
     { urls: 'stun:stun1.l.google.com:19302' }
   ]
 };

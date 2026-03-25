@@ -10,8 +10,8 @@ export default function CallScreenPage() {
       <main className="flex min-h-0 flex-1 overflow-y-auto">
         <CallUI
           defaultMode="audio"
-          title="Start a voice call"
-          description="Start a direct voice call with another signed-in user. The receiver can answer from this page."
+          title="Voice and video calls"
+          description="Start a direct call with another signed-in user and choose audio or video on the same page."
           theme="enhanced"
         />
       </main>

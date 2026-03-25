@@ -1,5 +1,6 @@
 import {
   get,
+  onChildChanged,
   limitToLast,
   off,
   onChildAdded,
@@ -14,7 +15,8 @@ import {
   set,
   update
 } from 'firebase/database';
-import { getRealtimeDb } from './firebaseClient';
+import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
+import { getFirebaseStorage, getRealtimeDb } from './firebaseClient';
 
 function directThreadId(userA, userB) {
   return [userA, userB].sort().join('__');
@@ -26,8 +28,15 @@ function mapDmMessage(id, value) {
     id,
     senderId: value.senderId,
     receiverId: value.receiverId,
-    content: value.content,
-    createdAt: value.createdAt || Date.now()
+    content: value.content || '',
+    mediaUrl: value.mediaUrl || '',
+    mediaType: value.mediaType || '',
+    fileName: value.fileName || '',
+    createdAt: value.createdAt || Date.now(),
+    updatedAt: value.updatedAt || null,
+    isDeleted: Boolean(value.isDeleted),
+    deletedAt: value.deletedAt || null,
+    deletedBy: value.deletedBy || null
   };
 }
 
@@ -61,6 +70,14 @@ export async function searchUsersByUsername(term, excludeUserId) {
 
 function normalizeUsername(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function postMessageBackup(payload) {
+  return fetch('/api/message-backup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).catch(() => undefined);
 }
 
 export async function ensureGroupMembership({ groupId, userId }) {
@@ -308,12 +325,45 @@ export function subscribeDirectMessages(userId, peerId, callback) {
   const realtimeDb = getRealtimeDb();
   const threadId = directThreadId(userId, peerId);
   const threadRef = query(ref(realtimeDb, `dmMessages/${threadId}`), limitToLast(100));
-  const listener = (snap) => {
+  const handleAdded = (snap) => {
     if (!snap.exists()) return;
-    callback(mapDmMessage(snap.key, snap.val()));
+    callback(mapDmMessage(snap.key, snap.val()), 'added');
   };
-  onChildAdded(threadRef, listener);
-  return () => off(threadRef, 'child_added', listener);
+  const handleChanged = (snap) => {
+    if (!snap.exists()) return;
+    callback(mapDmMessage(snap.key, snap.val()), 'changed');
+  };
+  onChildAdded(threadRef, handleAdded);
+  onChildChanged(threadRef, handleChanged);
+  return () => {
+    off(threadRef, 'child_added', handleAdded);
+    off(threadRef, 'child_changed', handleChanged);
+  };
+}
+
+async function syncRecentDirectChats({ realtimeDb, userId, peerId, threadId }) {
+  const latestSnap = await get(query(ref(realtimeDb, `dmMessages/${threadId}`), limitToLast(1)));
+  if (!latestSnap.exists()) return;
+  const latestEntries = Object.entries(latestSnap.val());
+  const [, latestValue] = latestEntries[latestEntries.length - 1];
+  const preview = latestValue?.isDeleted
+    ? 'This message has been deleted'
+    : latestValue?.mediaType === 'image'
+      ? 'Photo'
+      : latestValue?.mediaType === 'video'
+        ? 'Video'
+        : latestValue?.content || '';
+  const updatedAt = latestValue?.updatedAt || latestValue?.createdAt || Date.now();
+  const lastSenderId = latestValue?.senderId || userId;
+
+  await update(ref(realtimeDb), {
+    [`recentDirectChats/${userId}/${threadId}/lastMessage`]: preview,
+    [`recentDirectChats/${userId}/${threadId}/lastSenderId`]: lastSenderId,
+    [`recentDirectChats/${userId}/${threadId}/updatedAt`]: updatedAt,
+    [`recentDirectChats/${peerId}/${threadId}/lastMessage`]: preview,
+    [`recentDirectChats/${peerId}/${threadId}/lastSenderId`]: lastSenderId,
+    [`recentDirectChats/${peerId}/${threadId}/updatedAt`]: updatedAt
+  });
 }
 
 export async function sendDirectMessage({ senderId, receiverId, content }) {
@@ -326,6 +376,19 @@ export async function sendDirectMessage({ senderId, receiverId, content }) {
     receiverId,
     content,
     createdAt: now
+  });
+
+  postMessageBackup({
+    backupKey: `direct:${threadId}:${node.key}`,
+    scope: 'direct',
+    threadId,
+    messageId: node.key,
+    senderId,
+    receiverId,
+    content,
+    status: 'active',
+    firebaseCreatedAt: now,
+    firebaseUpdatedAt: now
   });
 
   try {
@@ -357,6 +420,72 @@ export async function sendDirectMessage({ senderId, receiverId, content }) {
   return node.key;
 }
 
+export async function sendDirectMedia({ senderId, receiverId, file }) {
+  if (!senderId || !receiverId || !file) {
+    throw new Error('Missing media message parameters.');
+  }
+
+  const isImage = file.type.startsWith('image/');
+  const isVideo = file.type.startsWith('video/');
+  if (!isImage && !isVideo) {
+    throw new Error('Only images and videos are supported.');
+  }
+
+  const realtimeDb = getRealtimeDb();
+  const storage = getFirebaseStorage();
+  const threadId = directThreadId(senderId, receiverId);
+  const now = Date.now();
+  const node = push(ref(realtimeDb, `dmMessages/${threadId}`));
+  const messageId = node.key;
+  const extension = file.name.includes('.') ? file.name.split('.').pop() : '';
+  const mediaRef = storageRef(
+    storage,
+    `dmMedia/${threadId}/${messageId}${extension ? `.${extension}` : ''}`
+  );
+
+  await uploadBytes(mediaRef, file, { contentType: file.type || undefined });
+  const mediaUrl = await getDownloadURL(mediaRef);
+  const mediaType = isImage ? 'image' : 'video';
+
+  await set(node, {
+    senderId,
+    receiverId,
+    content: '',
+    mediaUrl,
+    mediaType,
+    fileName: file.name || '',
+    createdAt: now
+  });
+
+  try {
+    await update(ref(realtimeDb), {
+      [`recentDirectChats/${senderId}/${threadId}`]: {
+        peerId: receiverId,
+        lastMessage: mediaType === 'image' ? 'Photo' : 'Video',
+        lastSenderId: senderId,
+        updatedAt: now,
+        unreadCount: 0
+      },
+      [`recentDirectChats/${receiverId}/${threadId}`]: {
+        peerId: senderId,
+        lastMessage: mediaType === 'image' ? 'Photo' : 'Video',
+        lastSenderId: senderId,
+        updatedAt: now
+      }
+    });
+
+    const unreadRef = ref(realtimeDb, `recentDirectChats/${receiverId}/${threadId}/unreadCount`);
+    await runTransaction(unreadRef, (current) => {
+      const safe = Number(current || 0);
+      return safe + 1;
+    });
+  } catch {
+    /* ignore recent index failures to avoid blocking messages */
+  }
+
+  return messageId;
+}
+
 export async function deleteDirectMessage({ userId, peerId, messageId }) {
   if (!userId || !peerId || !messageId) {
     throw new Error('Missing delete message parameters.');
@@ -370,7 +499,39 @@ export async function deleteDirectMessage({ userId, peerId, messageId }) {
   if (value.senderId !== userId) {
     throw new Error('You can only delete your own messages.');
   }
-  await remove(messageRef);
+  if (value.isDeleted) return;
+  const now = Date.now();
+  await update(messageRef, {
+    content: 'This message has been deleted',
+    isDeleted: true,
+    deletedAt: now,
+    deletedBy: userId,
+    updatedAt: now
+  });
+
+  postMessageBackup({
+    backupKey: `direct:${threadId}:${messageId}`,
+    scope: 'direct',
+    threadId,
+    messageId,
+    senderId: value.senderId || userId,
+    receiverId: value.receiverId || peerId,
+    content: 'This message has been deleted',
+    status: 'deleted',
+    firebaseCreatedAt: value.createdAt || now,
+    firebaseUpdatedAt: now
+  });
+
+  try {
+    await syncRecentDirectChats({
+      realtimeDb,
+      userId,
+      peerId,
+      threadId
+    });
+  } catch {
+    /* ignore recent index failures to avoid blocking deletes */
+  }
 }
 
 export async function editDirectMessage({ userId, peerId, messageId, newContent }) {
@@ -392,6 +553,9 @@ export async function editDirectMessage({ userId, peerId, messageId, newContent 
   if (value.senderId !== userId) {
     throw new Error('You can only edit your own messages.');
   }
+  if (value.isDeleted) {
+    throw new Error('Deleted messages cannot be edited.');
+  }
 
   const createdAt = Number(value.createdAt || 0);
   const now = Date.now();
@@ -405,20 +569,26 @@ export async function editDirectMessage({ userId, peerId, messageId, newContent 
     updatedAt: now
   });
 
-  // Keep recent chats preview in sync (without touching unreadCount).
+  postMessageBackup({
+    backupKey: `direct:${threadId}:${messageId}`,
+    scope: 'direct',
+    threadId,
+    messageId,
+    senderId: value.senderId || userId,
+    receiverId: value.receiverId || peerId,
+    content,
+    status: 'active',
+    firebaseCreatedAt: createdAt || now,
+    firebaseUpdatedAt: now
+  });
+
   try {
-    await Promise.all([
-      update(ref(realtimeDb), {
-        [`recentDirectChats/${userId}/${threadId}/lastMessage`]: content,
-        [`recentDirectChats/${userId}/${threadId}/lastSenderId`]: userId,
-        [`recentDirectChats/${userId}/${threadId}/updatedAt`]: now
-      }),
-      update(ref(realtimeDb), {
-        [`recentDirectChats/${peerId}/${threadId}/lastMessage`]: content,
-        [`recentDirectChats/${peerId}/${threadId}/lastSenderId`]: userId,
-        [`recentDirectChats/${peerId}/${threadId}/updatedAt`]: now
-      })
-    ]);
+    await syncRecentDirectChats({
+      realtimeDb,
+      userId,
+      peerId,
+      threadId
+    });
   } catch {
     /* ignore recent index failures to avoid blocking edits */
   }
@@ -464,6 +634,18 @@ export async function sendGroupMessage({ groupId, senderId, message }) {
     message,
     createdAt: Date.now()
   });
+
+  postMessageBackup({
+    backupKey: `group:${normalizedGroupId}:${node.key}`,
+    scope: 'group',
+    groupId: normalizedGroupId,
+    messageId: node.key,
+    senderId,
+    content: message,
+    status: 'active',
+    firebaseCreatedAt: Date.now(),
+    firebaseUpdatedAt: Date.now()
+  });
   return node.key;
 }
 
@@ -480,6 +662,17 @@ export async function deleteGroupMessage({ groupId, userId, messageId }) {
   if (value.senderId !== userId) {
     throw new Error('You can only delete your own messages.');
   }
+  postMessageBackup({
+    backupKey: `group:${normalizedGroupId}:${messageId}`,
+    scope: 'group',
+    groupId: normalizedGroupId,
+    messageId,
+    senderId: value.senderId || userId,
+    content: 'This message has been deleted',
+    status: 'deleted',
+    firebaseCreatedAt: value.createdAt || Date.now(),
+    firebaseUpdatedAt: Date.now()
+  });
   await remove(messageRef);
 }
 

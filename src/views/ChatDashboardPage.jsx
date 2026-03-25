@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -12,6 +13,7 @@ import {
   listDirectMessages,
   markRecentDirectChatRead,
   searchUsersByUsername,
+  sendDirectMedia,
   sendDirectMessage,
   subscribeDirectMessages,
   subscribeRecentDirectChats,
@@ -21,6 +23,7 @@ import { motion } from 'framer-motion';
 import {
   Loader2,
   MessageCircle,
+  Paperclip,
   Phone,
   MoreVertical,
   Pencil,
@@ -61,6 +64,7 @@ export default function ChatDashboardPage() {
   const EDIT_WINDOW_MS = 15 * 60 * 1000;
   const searchWrapRef = useRef(null);
   const searchInputRef = useRef(null);
+  const mediaInputRef = useRef(null);
 
   useEffect(() => {
     const onDoc = (e) => {
@@ -193,7 +197,12 @@ export default function ChatDashboardPage() {
         history.forEach((msg) => seen.add(msg._id));
         setMessages(history);
         setMessagesLoading(false);
-        unsubscribe = subscribeDirectMessages(user.id, activeUserId.trim(), (msg) => {
+        unsubscribe = subscribeDirectMessages(user.id, activeUserId.trim(), (msg, changeType) => {
+          if (changeType === 'changed') {
+            setMessages((prev) => prev.map((item) => (item._id === msg._id ? { ...item, ...msg } : item)));
+            return;
+          }
+
           if (seen.has(msg._id)) return;
           seen.add(msg._id);
           setMessages((prev) => [...prev, msg]);
@@ -254,8 +263,32 @@ export default function ChatDashboardPage() {
     }
   };
 
+  const handleSelectMedia = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !user?.id || !activeUserId.trim()) return;
+
+    setSendingMessage(true);
+    setActionError('');
+    try {
+      await sendDirectMedia({
+        senderId: user.id,
+        receiverId: activeUserId.trim(),
+        file
+      });
+    } catch (err) {
+      setActionError(err?.message || 'Could not send media. Please try again.');
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
   const handleEditMessage = async (message) => {
     if (!user?.id || !activeUserId?.trim() || !message?._id) return;
+    if (message.isDeleted) {
+      setActionError('Deleted messages cannot be edited.');
+      return;
+    }
     const createdAt = Number(message.createdAt || 0);
     const canAccess = createdAt && Date.now() - createdAt <= EDIT_WINDOW_MS;
     if (!canAccess) {
@@ -298,7 +331,6 @@ export default function ChatDashboardPage() {
         peerId: activeUserId.trim(),
         messageId
       });
-      setMessages((prev) => prev.filter((item) => item._id !== messageId));
     } catch {
       setActionError('Could not delete message. Please try again.');
     } finally {
@@ -552,13 +584,21 @@ export default function ChatDashboardPage() {
                 {activeUserId.trim() && user?.id ? (
                   <>
                     <Button asChild size="sm" variant="secondary">
+<<<<<<< HEAD
                       <Link href="/call">
+=======
+                      <Link href={`/call?callee=${encodeURIComponent(activeUserId.trim())}&calleeName=${encodeURIComponent(peerUsername || '')}&mode=audio`}>
+>>>>>>> a5e9db6 (vvv)
                         <Phone className="mr-1.5 h-4 w-4" />
                         Voice
                       </Link>
                     </Button>
                     <Button asChild size="sm" variant="secondary">
+<<<<<<< HEAD
                       <Link href="/video-call">
+=======
+                      <Link href={`/call?callee=${encodeURIComponent(activeUserId.trim())}&calleeName=${encodeURIComponent(peerUsername || '')}&mode=video`}>
+>>>>>>> a5e9db6 (vvv)
                         <Video className="mr-1.5 h-4 w-4" />
                         Video
                       </Link>
@@ -604,7 +644,7 @@ export default function ChatDashboardPage() {
               {messages.map((m, idx) => {
                 const mine = m.senderId === user?.id;
                 const createdAt = Number(m.createdAt || 0);
-                const canEditDelete = createdAt && Date.now() - createdAt <= EDIT_WINDOW_MS;
+                const canEditDelete = !m.isDeleted && createdAt && Date.now() - createdAt <= EDIT_WINDOW_MS;
                 const peerLabel = activeUserId.trim() ? peerUsername || peerShort : 'Peer';
                 const senderLabel = mine ? user?.username || 'You' : peerLabel;
                 return (
@@ -682,9 +722,37 @@ export default function ChatDashboardPage() {
                           {senderLabel}
                         </div>
                       </div>
-                      <p className={cn('mt-1 leading-relaxed', mine ? 'text-white' : 'text-amber-950 dark:text-slate-50')}>
-                        {m.content}
-                      </p>
+                      {m.mediaType === 'image' && m.mediaUrl ? (
+                        <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="mt-2 block">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={m.mediaUrl}
+                            alt={m.fileName || 'Shared image'}
+                            className="max-h-72 w-auto rounded-xl object-cover"
+                          />
+                        </a>
+                      ) : null}
+                      {m.mediaType === 'video' && m.mediaUrl ? (
+                        <video
+                          src={m.mediaUrl}
+                          controls
+                          className="mt-2 max-h-72 w-full rounded-xl bg-black"
+                        />
+                      ) : null}
+                      {(m.content || m.isDeleted) ? (
+                        <p
+                          className={cn(
+                            'mt-1 leading-relaxed',
+                            m.isDeleted
+                              ? 'italic opacity-80'
+                              : mine
+                                ? 'text-white'
+                                : 'text-amber-950 dark:text-slate-50'
+                          )}
+                        >
+                          {m.content}
+                        </p>
+                      ) : null}
                     </div>
                   </motion.div>
                 );
@@ -739,6 +807,25 @@ export default function ChatDashboardPage() {
               className="flex flex-col gap-2 border-t border-amber-200/60 bg-white/80 p-3 dark:border-navy-700/40 dark:bg-navy-950/70 sm:flex-row sm:items-center"
               onSubmit={sendMessage}
             >
+              <input
+                ref={mediaInputRef}
+                type="file"
+                accept="image/*,video/*"
+                className="hidden"
+                onChange={handleSelectMedia}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                className="h-10 w-10 shrink-0"
+                disabled={!activeUserId.trim() || sendingMessage}
+                onClick={() => mediaInputRef.current?.click()}
+                title="Share image or video"
+                aria-label="Share image or video"
+              >
+                <Paperclip className="h-4 w-4" />
+              </Button>
               <input
                 className="input flex-1"
                 value={input}

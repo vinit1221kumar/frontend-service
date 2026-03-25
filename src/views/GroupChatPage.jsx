@@ -46,6 +46,21 @@ export default function GroupChatPage() {
   const groupSearchWrapRef = useRef(null);
 
   const isMember = !!user?.id && groupMembers.some((member) => member.id === user.id);
+  const senderNamesById = groupMembers.reduce((acc, member) => {
+    acc[member.id] = member.username || member.id;
+    return acc;
+  }, {});
+
+  if (user?.id) {
+    senderNamesById[user.id] = user.username || senderNamesById[user.id] || user.id;
+  }
+
+  const getMemberLabel = useCallback((member) => {
+    if (member.id === user?.id) {
+      return user?.username || 'You';
+    }
+    return member.username || member.id;
+  }, [user?.id, user?.username]);
 
   useEffect(() => {
     if (!groupSearchOpen) return;
@@ -321,7 +336,8 @@ export default function GroupChatPage() {
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
             {groupId.trim() ? (
               <div className="rounded-xl border border-amber-200/70 bg-amber-50/90 px-3 py-2 text-sm font-medium text-amber-950 dark:border-navy-700/50 dark:bg-navy-900/40 dark:text-slate-100">
-                <span className="font-mono text-xs">{groupId.trim()}</span>
+                <div>Current group</div>
+                <div className="font-mono text-xs opacity-80">{groupId.trim()}</div>
               </div>
             ) : (
               <p className="text-xs text-amber-800/75 dark:text-sky-400/85">Tap the search icon next to Group to set a group ID.</p>
@@ -361,7 +377,7 @@ export default function GroupChatPage() {
                       }}
                       className="w-full rounded-lg border border-amber-200/70 bg-white/70 px-2.5 py-2 text-left text-xs font-medium text-amber-900 hover:bg-amber-50 dark:border-navy-700/50 dark:bg-navy-950/40 dark:text-slate-100 dark:hover:bg-navy-900/50"
                     >
-                      <div className="font-mono">{group.id}</div>
+                      <div>Group {group.id}</div>
                       <div className="text-[11px] opacity-80">{group.memberCount} members</div>
                     </button>
                   ))}
@@ -403,7 +419,7 @@ export default function GroupChatPage() {
                       )}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <div className="font-medium text-amber-900 dark:text-slate-100">{member.username}</div>
+                        <div className="font-medium text-amber-900 dark:text-slate-100">{getMemberLabel(member)}</div>
                         {recentlyAddedMemberId === member.id && (
                           <span className="rounded-full bg-emerald-600/90 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
                             New
@@ -453,6 +469,7 @@ export default function GroupChatPage() {
               </div>
             )}
 
+<<<<<<< HEAD
             {messages.map((m, idx) => {
               const sender = groupMembers.find((member) => member.id === m.senderId);
               const senderLabel = sender?.username || m.senderId;
@@ -483,6 +500,42 @@ export default function GroupChatPage() {
                 </motion.div>
               );
             })}
+=======
+            {messages.map((m, idx) => (
+              (() => {
+                const senderName = m.senderId === user?.id
+                  ? user?.username || 'You'
+                  : senderNamesById[m.senderId] || 'Group member';
+
+                return (
+                  <motion.div
+                    key={m._id || idx}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs text-slate-500 dark:text-slate-400">{senderName}</div>
+                      {m.senderId === user?.id && (
+                        <button
+                          type="button"
+                          className="rounded-md p-1 text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-slate-100"
+                          onClick={() => handleDeleteGroupMessage(m._id)}
+                          disabled={deletingMessageId === m._id}
+                          aria-label="Delete message"
+                          title="Delete message"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="mt-1 text-slate-900 dark:text-slate-100">{m.message}</div>
+                  </motion.div>
+                );
+              })()
+            ))}
+>>>>>>> a5e9db6 (vvv)
             {messages.length === 0 && (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-300">
                 No messages yet. Set a groupId and send a message.
@@ -517,4 +570,3 @@ export default function GroupChatPage() {
     </div>
   );
 }
-

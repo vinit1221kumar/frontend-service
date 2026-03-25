@@ -22,6 +22,15 @@ function log(message: string, payload?: unknown) {
   console.log(`[call] ${message}`, payload ?? "");
 }
 
+async function clearPeerSignalState(userId: string, peerUserId: string) {
+  await Promise.all([
+    remove(child(userCallRef(userId), "offer")),
+    remove(child(userCallRef(userId), "answer")),
+    remove(child(userCallRef(userId), "rejected")),
+    remove(child(userCallRef(userId), `candidates/${peerUserId}`)),
+  ]);
+}
+
 export async function startCall(params: {
   callerId: string;
   calleeId: string;
@@ -37,11 +46,11 @@ export async function startCall(params: {
     createdAt: Date.now(),
   };
   log("startCall -> write offer", { callerId, calleeId, mode });
-  await remove(child(userCallRef(callerId), "answer"));
-  await remove(child(userCallRef(callerId), "rejected"));
-  await remove(child(userCallRef(calleeId), `candidates/${callerId}`));
+  await Promise.all([
+    clearPeerSignalState(callerId, calleeId),
+    clearPeerSignalState(calleeId, callerId),
+  ]);
   await set(child(userCallRef(calleeId), "offer"), offerPayload);
-  await remove(child(userCallRef(calleeId), "answer"));
 }
 
 export function listenForIncomingCall(
@@ -71,6 +80,10 @@ export async function acceptCall(params: {
     createdAt: Date.now(),
   };
   log("acceptCall -> write answer", { userId, callerId });
+  await Promise.all([
+    remove(child(userCallRef(callerId), "rejected")),
+    remove(child(userCallRef(callerId), `candidates/${userId}`)),
+  ]);
   await set(child(userCallRef(callerId), "answer"), payload);
   await remove(child(userCallRef(userId), "offer"));
   await remove(child(userCallRef(userId), "rejected"));
