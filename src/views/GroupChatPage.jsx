@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import {
   addGroupMemberByUsername,
@@ -16,6 +16,7 @@ import { motion } from 'framer-motion';
 import { MessageSquare, Search, Send, Trash2, UserPlus, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AppMainHeader } from '@/components/AppMainHeader';
+import { cn } from '@/lib/utils';
 
 export default function GroupChatPage() {
   const { user } = useAuth();
@@ -26,13 +27,21 @@ export default function GroupChatPage() {
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState([]);
   const [deletingMessageId, setDeletingMessageId] = useState('');
+  const [recentlyAddedMemberId, setRecentlyAddedMemberId] = useState('');
   const [memberUsername, setMemberUsername] = useState('');
   const [sending, setSending] = useState(false);
   const [addingMember, setAddingMember] = useState(false);
   const [membersLoading, setMembersLoading] = useState(false);
   const [groupsLoading, setGroupsLoading] = useState(false);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [groupsLoadError, setGroupsLoadError] = useState('');
+  const [membersLoadError, setMembersLoadError] = useState('');
+  const [messagesLoadError, setMessagesLoadError] = useState('');
   const [panelError, setPanelError] = useState('');
   const [panelSuccess, setPanelSuccess] = useState('');
+  const [groupsRefreshTick, setGroupsRefreshTick] = useState(0);
+  const [membersRefreshTick, setMembersRefreshTick] = useState(0);
+  const [messagesRefreshTick, setMessagesRefreshTick] = useState(0);
   const [groupSearchOpen, setGroupSearchOpen] = useState(false);
   const groupSearchWrapRef = useRef(null);
 
@@ -50,8 +59,13 @@ export default function GroupChatPage() {
   useEffect(() => {
     if (!groupId.trim() || !user?.id) {
       setMessages([]);
+      setMessagesLoading(false);
+      setMessagesLoadError('');
       return;
     }
+
+    setMessagesLoading(true);
+    setMessagesLoadError('');
 
     let cancelled = false;
     const seen = new Set();
@@ -64,13 +78,17 @@ export default function GroupChatPage() {
         if (cancelled) return;
         history.forEach((item) => seen.add(item._id));
         setMessages(history);
+        setMessagesLoading(false);
         unsubscribe = subscribeGroupMessages(groupId.trim(), (msg) => {
           if (seen.has(msg._id)) return;
           seen.add(msg._id);
           setMessages((prev) => [...prev, msg]);
         });
-      } catch {
-        if (!cancelled) setMessages([]);
+      } catch (err) {
+        if (!cancelled) {
+          setMessagesLoadError(err?.message || 'Could not load group messages.');
+          setMessagesLoading(false);
+        }
       }
     })();
 
@@ -78,48 +96,58 @@ export default function GroupChatPage() {
       cancelled = true;
       unsubscribe();
     };
-  }, [groupId, user?.id]);
+  }, [groupId, user?.id, messagesRefreshTick]);
 
-  const loadGroupMembers = async (id) => {
+  const loadGroupMembers = useCallback(async (id) => {
     const normalized = String(id || '').trim();
     if (!normalized) {
       setGroupMembers([]);
+      setMembersLoadError('');
       return;
     }
     setMembersLoading(true);
+    setMembersLoadError('');
     try {
       const items = await listGroupMembers(normalized);
       setGroupMembers(items);
-    } catch {
-      setGroupMembers([]);
+    } catch (err) {
+      setMembersLoadError(err?.message || 'Could not load group members.');
     } finally {
       setMembersLoading(false);
     }
-  };
+  }, []);
 
-  const loadUserGroups = async () => {
+  const loadUserGroups = useCallback(async () => {
     if (!user?.id) {
       setGroupList([]);
+      setGroupsLoadError('');
       return;
     }
     setGroupsLoading(true);
+    setGroupsLoadError('');
     try {
       const items = await listUserGroups(user.id);
       setGroupList(items);
-    } catch {
-      setGroupList([]);
+    } catch (err) {
+      setGroupsLoadError(err?.message || 'Could not load groups.');
     } finally {
       setGroupsLoading(false);
     }
-  };
-
-  useEffect(() => {
-    loadUserGroups();
   }, [user?.id]);
 
   useEffect(() => {
+    loadUserGroups();
+  }, [loadUserGroups, groupsRefreshTick]);
+
+  useEffect(() => {
     loadGroupMembers(groupId);
-  }, [groupId]);
+  }, [groupId, loadGroupMembers, membersRefreshTick]);
+
+  useEffect(() => {
+    if (!recentlyAddedMemberId) return;
+    const timeout = setTimeout(() => setRecentlyAddedMemberId(''), 2200);
+    return () => clearTimeout(timeout);
+  }, [recentlyAddedMemberId]);
 
   const openGroup = async () => {
     const normalized = groupInput.trim();
@@ -131,25 +159,30 @@ export default function GroupChatPage() {
       setGroupId(normalized);
       setGroupSearchOpen(false);
       await Promise.all([loadUserGroups(), loadGroupMembers(normalized)]);
-    } catch {
-      setPanelError('Could not open group right now.');
+    } catch (err) {
+      setPanelError(err?.message || 'Could not open group right now.');
     }
   };
 
   const handleAddMember = async () => {
-    if (!groupId.trim() || !memberUsername.trim() || !user?.id) return;
+    const targetGroupId = groupId.trim() || groupInput.trim();
+    if (!targetGroupId || !memberUsername.trim() || !user?.id) return;
     setAddingMember(true);
     setPanelError('');
     setPanelSuccess('');
     try {
+      await ensureGroupMembership({ groupId: targetGroupId, userId: user.id });
       const added = await addGroupMemberByUsername({
-        groupId: groupId.trim(),
+        groupId: targetGroupId,
         username: memberUsername.trim(),
         addedById: user.id
       });
+      setGroupId(targetGroupId);
+      setGroupInput(targetGroupId);
       setPanelSuccess(`${added.username} added to group.`);
+      setRecentlyAddedMemberId(added.id);
       setMemberUsername('');
-      await Promise.all([loadGroupMembers(groupId.trim()), loadUserGroups()]);
+      await Promise.all([loadGroupMembers(targetGroupId), loadUserGroups()]);
     } catch (err) {
       setPanelError(err?.message || 'Could not add user to group.');
     } finally {
@@ -272,7 +305,7 @@ export default function GroupChatPage() {
                       variant="secondary"
                       className="shrink-0"
                       onClick={handleAddMember}
-                      disabled={!groupId.trim() || !memberUsername.trim() || addingMember}
+                      disabled={!(groupId.trim() || groupInput.trim()) || !memberUsername.trim() || addingMember}
                     >
                       <UserPlus className="mr-1 h-4 w-4" />
                       Add
@@ -298,6 +331,20 @@ export default function GroupChatPage() {
               <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700/90 dark:text-sky-400/90">
                 My groups
               </p>
+              {groupsLoadError && (
+                <div className="mb-2 rounded-lg border border-red-400/40 bg-red-500/10 px-2 py-1.5 text-xs text-red-700 dark:text-red-300">
+                  <p>{groupsLoadError}</p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="mt-1 h-7 px-2 text-[11px]"
+                    onClick={() => setGroupsRefreshTick((value) => value + 1)}
+                  >
+                    Retry
+                  </Button>
+                </div>
+              )}
               {groupsLoading ? (
                 <p className="text-xs text-amber-800/75 dark:text-slate-300/85">Loading groups…</p>
               ) : groupList.length === 0 ? (
@@ -326,6 +373,20 @@ export default function GroupChatPage() {
               <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700/90 dark:text-sky-400/90">
                 Members
               </p>
+              {membersLoadError && (
+                <div className="mb-2 rounded-lg border border-red-400/40 bg-red-500/10 px-2 py-1.5 text-xs text-red-700 dark:text-red-300">
+                  <p>{membersLoadError}</p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="mt-1 h-7 px-2 text-[11px]"
+                    onClick={() => setMembersRefreshTick((value) => value + 1)}
+                  >
+                    Retry
+                  </Button>
+                </div>
+              )}
               {membersLoading ? (
                 <p className="text-xs text-amber-800/75 dark:text-slate-300/85">Loading members…</p>
               ) : groupMembers.length === 0 ? (
@@ -335,9 +396,20 @@ export default function GroupChatPage() {
                   {groupMembers.map((member) => (
                     <div
                       key={member.id}
-                      className="rounded-lg border border-amber-200/70 bg-white/70 px-2.5 py-1.5 text-xs dark:border-navy-700/50 dark:bg-navy-950/40"
+                      className={cn(
+                        'rounded-lg border border-amber-200/70 bg-white/70 px-2.5 py-1.5 text-xs transition-colors duration-300 dark:border-navy-700/50 dark:bg-navy-950/40',
+                        recentlyAddedMemberId === member.id &&
+                          'border-emerald-300 bg-emerald-50/80 animate-pulse dark:border-emerald-500/40 dark:bg-emerald-900/20'
+                      )}
                     >
-                      <div className="font-medium text-amber-900 dark:text-slate-100">{member.username}</div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-medium text-amber-900 dark:text-slate-100">{member.username}</div>
+                        {recentlyAddedMemberId === member.id && (
+                          <span className="rounded-full bg-emerald-600/90 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                            New
+                          </span>
+                        )}
+                      </div>
                       <div className="font-mono text-[10px] text-amber-700/85 dark:text-slate-300/80">{member.id}</div>
                     </div>
                   ))}
@@ -361,6 +433,27 @@ export default function GroupChatPage() {
           </div>
 
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain bg-amber-50/20 px-4 py-4 dark:bg-navy-900/25">
+            {messagesLoadError && (
+              <div className="rounded-xl border border-red-400/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+                <p>{messagesLoadError}</p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="mt-2 h-7 px-2 text-[11px]"
+                  onClick={() => setMessagesRefreshTick((value) => value + 1)}
+                >
+                  Retry
+                </Button>
+              </div>
+            )}
+
+            {messagesLoading && (
+              <div className="rounded-xl border border-amber-200/70 bg-amber-50/80 px-3 py-2 text-xs text-amber-800 dark:border-navy-700/50 dark:bg-navy-900/40 dark:text-slate-300">
+                Loading messages…
+              </div>
+            )}
+
             {messages.map((m, idx) => (
               <motion.div
                 key={m._id || idx}

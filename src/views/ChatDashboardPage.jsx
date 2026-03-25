@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { formatPeerPresence } from '@/lib/formatPresence';
 import { cn } from '@/lib/utils';
 import { useAuth } from '../hooks/useAuth';
@@ -34,12 +35,19 @@ import { AppMainHeader } from '@/components/AppMainHeader';
 export default function ChatDashboardPage() {
   const { user } = useAuth();
   const [messages, setMessages] = useState([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messageLoadError, setMessageLoadError] = useState('');
   const [deletingMessageId, setDeletingMessageId] = useState('');
   const [input, setInput] = useState('');
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const [actionError, setActionError] = useState('');
   const [activeUserId, setActiveUserId] = useState('');
   const [peerUsername, setPeerUsername] = useState('');
   const [recentChats, setRecentChats] = useState([]);
   const [recentLoading, setRecentLoading] = useState(false);
+  const [recentLoadError, setRecentLoadError] = useState('');
+  const [recentRefreshTick, setRecentRefreshTick] = useState(0);
+  const [historyRefreshTick, setHistoryRefreshTick] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -89,6 +97,7 @@ export default function ChatDashboardPage() {
   const pickPeer = (id, username) => {
     setActiveUserId(id);
     setPeerUsername(username);
+    setActionError('');
     setSearchOpen(false);
     setSearchQuery('');
   };
@@ -123,27 +132,41 @@ export default function ChatDashboardPage() {
   useEffect(() => {
     if (!user?.id) {
       setRecentChats([]);
+      setRecentLoadError('');
       return;
     }
 
     setRecentLoading(true);
-    const unsubscribe = subscribeRecentDirectChats(user.id, (items) => {
-      setRecentChats(items);
+    setRecentLoadError('');
+    let unsubscribe = () => undefined;
+
+    try {
+      unsubscribe = subscribeRecentDirectChats(user.id, (items) => {
+        setRecentChats(items);
+        setRecentLoadError('');
+        setRecentLoading(false);
+      });
+    } catch {
+      setRecentLoadError('Could not load recent chats.');
       setRecentLoading(false);
-    });
+    }
 
     return () => {
       unsubscribe();
     };
-  }, [user?.id]);
+  }, [user?.id, recentRefreshTick]);
 
   useEffect(() => {
     if (!user?.id || !activeUserId.trim()) {
       setMessages([]);
+      setMessagesLoading(false);
+      setMessageLoadError('');
       return;
     }
 
     markRecentDirectChatRead(user.id, activeUserId.trim()).catch(() => undefined);
+    setMessagesLoading(true);
+    setMessageLoadError('');
 
     let cancelled = false;
     const seen = new Set();
@@ -155,6 +178,7 @@ export default function ChatDashboardPage() {
         if (cancelled) return;
         history.forEach((msg) => seen.add(msg._id));
         setMessages(history);
+        setMessagesLoading(false);
         unsubscribe = subscribeDirectMessages(user.id, activeUserId.trim(), (msg) => {
           if (seen.has(msg._id)) return;
           seen.add(msg._id);
@@ -164,7 +188,10 @@ export default function ChatDashboardPage() {
           }
         });
       } catch {
-        if (!cancelled) setMessages([]);
+        if (!cancelled) {
+          setMessageLoadError('Could not load messages.');
+          setMessagesLoading(false);
+        }
       }
     })();
 
@@ -172,23 +199,32 @@ export default function ChatDashboardPage() {
       cancelled = true;
       unsubscribe();
     };
-  }, [user?.id, activeUserId]);
+  }, [user?.id, activeUserId, historyRefreshTick]);
 
   const sendMessage = async (e) => {
     e.preventDefault();
     if (!user?.id || !activeUserId || !input.trim()) return;
-    await sendDirectMessage({
-      senderId: user.id,
-      receiverId: activeUserId.trim(),
-      content: input.trim()
-    });
-    setInput('');
+    setSendingMessage(true);
+    setActionError('');
+    try {
+      await sendDirectMessage({
+        senderId: user.id,
+        receiverId: activeUserId.trim(),
+        content: input.trim()
+      });
+      setInput('');
+    } catch {
+      setActionError('Could not send message. Please try again.');
+    } finally {
+      setSendingMessage(false);
+    }
   };
 
   const handleDeleteMessage = async (messageId) => {
     if (!messageId || !user?.id || !activeUserId.trim()) return;
     if (typeof window !== 'undefined' && !window.confirm('Are you sure you want to delete this message?')) return;
     setDeletingMessageId(messageId);
+    setActionError('');
     try {
       await deleteDirectMessage({
         userId: user.id,
@@ -197,7 +233,7 @@ export default function ChatDashboardPage() {
       });
       setMessages((prev) => prev.filter((item) => item._id !== messageId));
     } catch {
-      /* ignore */
+      setActionError('Could not delete message. Please try again.');
     } finally {
       setDeletingMessageId('');
     }
@@ -325,6 +361,21 @@ export default function ChatDashboardPage() {
                   Recent chats
                 </p>
 
+                {recentLoadError && (
+                  <div className="rounded-lg border border-red-400/40 bg-red-500/10 px-2.5 py-2 text-xs text-red-700 dark:text-red-300">
+                    <p>{recentLoadError}</p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="mt-2 h-7 px-2 text-[11px]"
+                      onClick={() => setRecentRefreshTick((value) => value + 1)}
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                )}
+
                 {recentLoading ? (
                   <div className="flex items-center gap-2 px-2 py-2 text-xs text-amber-700 dark:text-slate-300">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -376,13 +427,12 @@ export default function ChatDashboardPage() {
                   <>
                     <div className="relative shrink-0">
                       {!peerAvatarFailed ? (
-                        <img
+                        <Image
                           src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${peerAvatarSeed}`}
                           alt=""
                           width={48}
                           height={48}
                           className="h-12 w-12 rounded-2xl border border-amber-200/70 bg-amber-50 object-cover dark:border-navy-700/50 dark:bg-navy-900/40"
-                          loading="lazy"
                           onError={() => setPeerAvatarFailed(true)}
                         />
                       ) : (
@@ -463,6 +513,27 @@ export default function ChatDashboardPage() {
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain bg-amber-50/20 px-3 py-3 dark:bg-navy-900/25 sm:px-4 sm:py-4">
+              {messageLoadError && (
+                <div className="rounded-xl border border-red-400/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+                  <p>{messageLoadError}</p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="mt-2 h-7 px-2 text-[11px]"
+                    onClick={() => setHistoryRefreshTick((value) => value + 1)}
+                  >
+                    Retry
+                  </Button>
+                </div>
+              )}
+
+              {messagesLoading && (
+                <div className="rounded-xl border border-amber-200/70 bg-amber-50/80 px-3 py-2 text-xs text-amber-800 dark:border-navy-700/50 dark:bg-navy-900/40 dark:text-slate-300">
+                  Loading messages…
+                </div>
+              )}
+
               {messages.map((m, idx) => {
                 const mine = m.senderId === user?.id;
                 const peerLabel = activeUserId.trim() ? peerUsername || peerShort : 'Peer';
@@ -495,13 +566,13 @@ export default function ChatDashboardPage() {
                         {mine && (
                           <button
                             type="button"
-                            className="rounded-md p-1 text-amber-100/90 transition hover:bg-white/20 hover:text-white"
+                            className="rounded-md px-2 py-1 text-[11px] font-semibold text-amber-50 transition hover:bg-white/20 hover:text-white"
                             onClick={() => handleDeleteMessage(m._id)}
                             disabled={deletingMessageId === m._id}
                             aria-label="Delete message"
                             title="Delete message"
                           >
-                            <Trash2 className="h-3.5 w-3.5" />
+                            {deletingMessageId === m._id ? 'Deleting…' : 'Delete'}
                           </button>
                         )}
                       </div>
@@ -543,11 +614,21 @@ export default function ChatDashboardPage() {
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={activeUserId.trim() ? 'Type a message…' : 'Choose someone to chat…'}
               />
-              <Button className="shrink-0 gap-2 sm:px-6" type="submit" disabled={!activeUserId.trim() || !input.trim()}>
+              <Button
+                className="shrink-0 gap-2 sm:px-6"
+                type="submit"
+                disabled={!activeUserId.trim() || !input.trim() || sendingMessage}
+              >
                 <Send className="h-4 w-4" />
-                Send
+                {sendingMessage ? 'Sending…' : 'Send'}
               </Button>
             </form>
+
+            {actionError && (
+              <div className="border-t border-amber-200/60 px-3 py-2 text-xs text-red-700 dark:border-navy-700/40 dark:text-red-300 sm:px-4">
+                {actionError}
+              </div>
+            )}
           </section>
         </div>
       </motion.main>

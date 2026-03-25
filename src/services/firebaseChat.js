@@ -1,4 +1,19 @@
-import { get, limitToLast, off, onChildAdded, onValue, orderByChild, push, query, ref, remove, runTransaction, set, update } from 'firebase/database';
+import {
+  get,
+  limitToLast,
+  off,
+  onChildAdded,
+  onDisconnect,
+  onValue,
+  orderByChild,
+  push,
+  query,
+  ref,
+  remove,
+  runTransaction,
+  set,
+  update
+} from 'firebase/database';
 import { getRealtimeDb } from './firebaseClient';
 
 function directThreadId(userA, userB) {
@@ -74,7 +89,9 @@ export async function addGroupMemberByUsername({ groupId, username, addedById })
   }
 
   const users = Object.values(usersSnap.val());
-  const targetUser = users.find((item) => normalizeUsername(item?.username) === usernameValue);
+  const exactMatch = users.find((item) => normalizeUsername(item?.username) === usernameValue);
+  const containsMatch = users.find((item) => normalizeUsername(item?.username).includes(usernameValue));
+  const targetUser = exactMatch || containsMatch;
 
   if (!targetUser?.uid) {
     throw new Error('User not found.');
@@ -161,6 +178,51 @@ export function subscribeUserPresence(userId, callback) {
   };
   onValue(userPresenceRef, listener);
   return () => off(userPresenceRef, 'value', listener);
+}
+
+export function initializeMyPresence(userId) {
+  if (!userId) return () => undefined;
+
+  const realtimeDb = getRealtimeDb();
+  const connectedRef = ref(realtimeDb, '.info/connected');
+  const sessionsRef = ref(realtimeDb, `presenceSessions/${userId}`);
+  const currentSessionRef = push(sessionsRef);
+  const userPresenceRef = ref(realtimeDb, `presence/${userId}`);
+
+  const sessionsListener = (snap) => {
+    const sessions = snap.exists() ? snap.val() : null;
+    const hasAnySession = !!sessions && Object.keys(sessions).length > 0;
+    update(userPresenceRef, {
+      online: hasAnySession,
+      lastSeen: hasAnySession ? null : Date.now()
+    }).catch(() => undefined);
+  };
+
+  const connectedListener = async (snap) => {
+    if (snap.val() !== true) return;
+    try {
+      await onDisconnect(currentSessionRef).remove();
+      await set(currentSessionRef, {
+        connectedAt: Date.now(),
+        updatedAt: Date.now()
+      });
+      await update(userPresenceRef, {
+        online: true,
+        lastSeen: null
+      });
+    } catch {
+      /* ignore transient presence sync failures */
+    }
+  };
+
+  onValue(sessionsRef, sessionsListener);
+  onValue(connectedRef, connectedListener);
+
+  return () => {
+    off(sessionsRef, 'value', sessionsListener);
+    off(connectedRef, 'value', connectedListener);
+    remove(currentSessionRef).catch(() => undefined);
+  };
 }
 
 export async function setMyPresence(userId, online) {

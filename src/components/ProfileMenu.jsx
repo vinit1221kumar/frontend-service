@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import { createPortal } from 'react-dom';
 import { Camera, KeyRound, Pencil, Trash2, X } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
@@ -227,7 +228,7 @@ export function ProfileMenu() {
           onClick={() => setMenuOpen((o) => !o)}
         >
           {avatarUrl ? (
-            <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+            <Image src={avatarUrl} alt="" fill unoptimized className="h-full w-full object-cover" />
           ) : (
             initial
           )}
@@ -295,9 +296,9 @@ export function ProfileMenu() {
         <Modal title="Profile photo" titleId="photo-modal-title" onClose={() => setPhotoOpen(false)}>
           <div className="space-y-5">
             <div className="flex flex-col items-center">
-              <div className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-2xl border-2 border-amber-200/90 bg-gradient-to-br from-amber-400 to-amber-600 text-4xl font-bold text-white shadow-inner dark:border-navy-600/50">
+              <div className="relative flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-2xl border-2 border-amber-200/90 bg-gradient-to-br from-amber-400 to-amber-600 text-4xl font-bold text-white shadow-inner dark:border-navy-600/50">
                 {avatarUrl ? (
-                  <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+                  <Image src={avatarUrl} alt="" fill unoptimized className="h-full w-full object-cover" />
                 ) : (
                   <span aria-hidden>{initial}</span>
                 )}

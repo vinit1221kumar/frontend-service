@@ -9,7 +9,7 @@ import {
   registerWithFirebase,
   subscribeToAuthState
 } from '../services/firebaseAuth';
-import { setMyPresence } from '../services/firebaseChat';
+import { initializeMyPresence } from '../services/firebaseChat';
 
 const AuthContext = createContext(null);
 
@@ -18,6 +18,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const userRef = useRef(null);
+  const stopPresenceRef = useRef(() => undefined);
 
   useEffect(() => {
     userRef.current = user;
@@ -26,27 +27,22 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const unsubscribe = subscribeToAuthState(async (authUser) => {
       try {
+        stopPresenceRef.current();
         const snapshot = await getCurrentAuthSnapshot(authUser);
         setToken(snapshot.token);
         setUser(snapshot.user);
         if (snapshot.user?.id) {
-          await setMyPresence(snapshot.user.id, true);
+          stopPresenceRef.current = initializeMyPresence(snapshot.user.id);
+        } else {
+          stopPresenceRef.current = () => undefined;
         }
       } finally {
         setLoading(false);
       }
     });
 
-    const onUnload = () => {
-      if (userRef.current?.id) {
-        setMyPresence(userRef.current.id, false).catch(() => undefined);
-      }
-    };
-
-    window.addEventListener('beforeunload', onUnload);
-
     return () => {
-      window.removeEventListener('beforeunload', onUnload);
+      stopPresenceRef.current();
       unsubscribe();
     };
   }, []);
@@ -55,27 +51,18 @@ export function AuthProvider({ children }) {
     const snapshot = await loginWithFirebase({ email, password });
     setToken(snapshot.token);
     setUser(snapshot.user);
-    if (snapshot.user?.id) {
-      await setMyPresence(snapshot.user.id, true);
-    }
   };
 
   const loginWithGoogle = async () => {
     const snapshot = await loginWithGoogleFirebase();
     setToken(snapshot.token);
     setUser(snapshot.user);
-    if (snapshot.user?.id) {
-      await setMyPresence(snapshot.user.id, true);
-    }
   };
 
   const register = async (username, email, password) => {
     const snapshot = await registerWithFirebase({ username, email, password });
     setToken(snapshot.token);
     setUser(snapshot.user);
-    if (snapshot.user?.id) {
-      await setMyPresence(snapshot.user.id, true);
-    }
   };
 
   const logout = async () => {

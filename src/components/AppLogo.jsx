@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Image from 'next/image';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/context/ThemeContext';
 
@@ -72,7 +73,7 @@ export function AppLogo({ variant = 'mark', className, imgClassName }) {
 
   if (variant === 'badge') {
     const img = (
-      <img
+      <Image
         src={logoSrc}
         alt="D-Lite"
         width={512}
@@ -109,9 +110,11 @@ export function AppLogo({ variant = 'mark', className, imgClassName }) {
 
   return (
     <div className={cn(wrap, className)}>
-      <img
+      <Image
         src={logoSrc}
         alt="D-Lite"
+        width={64}
+        height={64}
         className={cn('h-full w-full min-h-0 min-w-0', logoImgCover, imgClassName)}
         draggable={false}
         onError={() => setFailed(true)}
