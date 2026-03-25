@@ -1,0 +1,31 @@
+# dependencies
+node_modules
+
+# next.js build output
+.next
+out
+coverage
+
+# vcs and editor
+.git
+.gitignore
+.vscode
+.idea
+
+# env and local files
+.env
+.env.*
+!.env.local.example
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# docs and misc
+README.md
+.DS_Store
+
+.env.*

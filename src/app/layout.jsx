@@ -1,0 +1,26 @@
+import '@/styles/globals.css';
+import { Providers } from './providers';
+
+export const metadata = {
+  title: 'D-Lite',
+  description: 'Chat • Groups • Calls',
+  icons: {
+    icon: [{ url: '/images/logo.png', type: 'image/png' }],
+    apple: '/images/logo.png'
+  }
+};
+
+const themeScript = `(function(){try{var k='d-lite-theme';var m=localStorage.getItem(k);var dark;if(m==='light')dark=false;else if(m==='dark')dark=true;else if(m==='system')dark=window.matchMedia('(prefers-color-scheme: dark)').matches;else dark=true;var r=document.documentElement;r.classList.toggle('dark',dark);r.style.colorScheme=dark?'dark':'light';}catch(e){document.documentElement.classList.add('dark');}})();`;
+
+export default function RootLayout({ children }) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className="min-h-screen antialiased">
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  );
+}
