@@ -6,14 +6,16 @@ import {
   addGroupMemberByUsername,
   deleteGroupMessage,
   ensureGroupMembership,
+  leaveGroupMembership,
   listGroupMembers,
   listGroupMessages,
   listUserGroups,
   sendGroupMessage as sendFirebaseGroupMessage,
+  setGroupMuted,
   subscribeGroupMessages
 } from '../services/firebaseChat';
 import { motion } from 'framer-motion';
-import { MessageSquare, Search, Send, Trash2, UserPlus, Users } from 'lucide-react';
+import { BellOff, LogOut, MessageSquare, MoreVertical, Search, Send, Trash2, UserPlus, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AppMainHeader } from '@/components/AppMainHeader';
 import { cn } from '@/lib/utils';
@@ -43,7 +45,10 @@ export default function GroupChatPage() {
   const [membersRefreshTick, setMembersRefreshTick] = useState(0);
   const [messagesRefreshTick, setMessagesRefreshTick] = useState(0);
   const [groupSearchOpen, setGroupSearchOpen] = useState(false);
+  const [groupMenuOpen, setGroupMenuOpen] = useState(false);
+  const [groupMuted, setGroupMuted] = useState(false);
   const groupSearchWrapRef = useRef(null);
+  const groupMenuRef = useRef(null);
 
   const isMember = !!user?.id && groupMembers.some((member) => member.id === user.id);
   const senderNamesById = groupMembers.reduce((acc, member) => {
@@ -164,6 +169,15 @@ export default function GroupChatPage() {
     return () => clearTimeout(timeout);
   }, [recentlyAddedMemberId]);
 
+  useEffect(() => {
+    if (!groupMenuOpen) return;
+    const onDoc = (e) => {
+      if (groupMenuRef.current && !groupMenuRef.current.contains(e.target)) setGroupMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [groupMenuOpen]);
+
   const openGroup = async () => {
     const normalized = groupInput.trim();
     if (!normalized || !user?.id) return;
@@ -240,6 +254,47 @@ export default function GroupChatPage() {
       setPanelError(err?.message || 'Could not delete message.');
     } finally {
       setDeletingMessageId('');
+    }
+  };
+
+  const handleLeaveGroup = async () => {
+    if (!groupId.trim() || !user?.id) return;
+    if (typeof window !== 'undefined' && !window.confirm('Leave this group?')) return;
+    setPanelError('');
+    setPanelSuccess('');
+    try {
+      await leaveGroupMembership({ groupId: groupId.trim(), userId: user.id });
+      setPanelSuccess('You left the group.');
+      setGroupId('');
+      setMessages([]);
+      setGroupMembers([]);
+      setGroupMenuOpen(false);
+      await loadUserGroups();
+    } catch (err) {
+      setPanelError(err?.message || 'Could not leave group.');
+    }
+  };
+
+  const handleShowMembers = () => {
+    if (!groupMembers.length) {
+      setPanelSuccess('No members in this group.');
+    } else {
+      const names = groupMembers.map((m) => getMemberLabel(m)).join(', ');
+      setPanelSuccess(`Members: ${names}`);
+    }
+    setGroupMenuOpen(false);
+  };
+
+  const handleToggleMuteGroup = async () => {
+    if (!groupId.trim() || !user?.id) return;
+    const next = !groupMuted;
+    try {
+      await setGroupMuted({ groupId: groupId.trim(), userId: user.id, muted: next });
+      setGroupMuted(next);
+      setPanelSuccess(next ? 'Group muted.' : 'Group unmuted.');
+      setGroupMenuOpen(false);
+    } catch (err) {
+      setPanelError(err?.message || 'Could not update mute setting.');
     }
   };
 
@@ -436,13 +491,62 @@ export default function GroupChatPage() {
 
         <section className="card anim-fade-up flex min-h-0 flex-1 flex-col overflow-hidden [animation-delay:130ms]">
           <div className="shrink-0 border-b border-amber-200/60 px-4 py-3 dark:border-navy-700/40">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="h-4 w-4 shrink-0 text-amber-600 dark:text-sky-400" />
-              <div>
-                <div className="text-sm font-semibold text-amber-950 dark:text-slate-50">Messages</div>
-                <div className="text-xs text-amber-800/70 dark:text-slate-300/80">
-                  {messages.length} total {groupId.trim() ? `• ${groupMembers.length} members` : ''}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 shrink-0 text-amber-600 dark:text-sky-400" />
+                <div>
+                  <div className="text-sm font-semibold text-amber-950 dark:text-slate-50">Messages</div>
+                  <div className="text-xs text-amber-800/70 dark:text-slate-300/80">
+                    {messages.length} total {groupId.trim() ? `• ${groupMembers.length} members` : ''}
+                    {groupMuted ? ' • muted' : ''}
+                  </div>
                 </div>
+              </div>
+              <div ref={groupMenuRef} className="relative">
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8"
+                  onClick={() => setGroupMenuOpen((o) => !o)}
+                  aria-label="Group options"
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+                {groupMenuOpen && (
+                  <div
+                    role="menu"
+                    className="anim-pop absolute right-0 top-full z-40 mt-1.5 min-w-[190px] overflow-hidden rounded-xl border border-amber-200/90 bg-white py-1.5 shadow-xl shadow-amber-900/10 dark:border-navy-700/60 dark:bg-navy-950"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-amber-950 transition-colors hover:bg-amber-100 dark:text-slate-50 dark:hover:bg-navy-800/60"
+                      onClick={handleShowMembers}
+                    >
+                      <Users className="h-4 w-4 shrink-0 opacity-80" />
+                      Show members
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-amber-950 transition-colors hover:bg-amber-100 dark:text-slate-50 dark:hover:bg-navy-800/60"
+                      onClick={handleToggleMuteGroup}
+                    >
+                      <BellOff className="h-4 w-4 shrink-0 opacity-80" />
+                      {groupMuted ? 'Unmute group' : 'Mute group'}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-700 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/50"
+                      onClick={handleLeaveGroup}
+                    >
+                      <LogOut className="h-4 w-4 shrink-0" />
+                      Leave group
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -470,38 +574,9 @@ export default function GroupChatPage() {
             )}
 
             {messages.map((m, idx) => {
-              const sender = groupMembers.find((member) => member.id === m.senderId);
-              const senderLabel = sender?.username || m.senderId;
-              return (
-                <motion.div
-                  key={m._id || idx}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-medium text-slate-600 dark:text-slate-300">{senderLabel}</div>
-                    {m.senderId === user?.id && (
-                      <button
-                        type="button"
-                        className="rounded-md p-1 text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-slate-100"
-                        onClick={() => handleDeleteGroupMessage(m._id)}
-                        disabled={deletingMessageId === m._id}
-                        aria-label="Delete message"
-                        title="Delete message"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                  <div className="mt-1 text-slate-900 dark:text-slate-100">{m.message}</div>
-                </motion.div>
-              );
-            })}
-            {messages.map((m, idx) => {
               const senderName =
                 m.senderId === user?.id ? user?.username || 'You' : senderNamesById[m.senderId] || 'Group member';
+              const mine = m.senderId === user?.id;
 
               return (
                 <motion.div
@@ -509,24 +584,40 @@ export default function GroupChatPage() {
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2 }}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
+                  className={cn('flex w-full', mine ? 'justify-end' : 'justify-start')}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-medium text-slate-600 dark:text-slate-300">{senderName}</div>
-                    {m.senderId === user?.id && (
-                      <button
-                        type="button"
-                        className="rounded-md p-1 text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-slate-100"
-                        onClick={() => handleDeleteGroupMessage(m._id)}
-                        disabled={deletingMessageId === m._id}
-                        aria-label="Delete message"
-                        title="Delete message"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                  <div
+                    className={cn(
+                      'w-full max-w-[85%] rounded-xl border px-3 py-2 text-sm sm:max-w-[72%]',
+                      mine
+                        ? 'border-amber-400/50 bg-gradient-to-br from-amber-500 to-amber-600 text-white'
+                        : 'border-slate-200 bg-slate-50 text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-100'
                     )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className={cn('text-xs font-medium', mine ? 'text-amber-100/90' : 'text-slate-600 dark:text-slate-300')}>
+                        {senderName}
+                      </div>
+                      {mine && (
+                        <button
+                          type="button"
+                          className={cn(
+                            'rounded-md p-1 transition',
+                            mine
+                              ? 'text-amber-100 hover:bg-white/15 hover:text-white'
+                              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-slate-100'
+                          )}
+                          onClick={() => handleDeleteGroupMessage(m._id)}
+                          disabled={deletingMessageId === m._id}
+                          aria-label="Delete message"
+                          title="Delete message"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    <div className={cn('mt-1', mine ? 'text-white' : 'text-slate-900 dark:text-slate-100')}>{m.message}</div>
                   </div>
-                  <div className="mt-1 text-slate-900 dark:text-slate-100">{m.message}</div>
                 </motion.div>
               );
             })}

@@ -337,10 +337,15 @@ export async function listDirectMessages(userId, peerId) {
   const realtimeDb = getRealtimeDb();
   const threadId = directThreadId(userId, peerId);
   const threadRef = query(ref(realtimeDb, `dmMessages/${threadId}`), limitToLast(100));
-  const snap = await get(threadRef);
+  const [snap, hiddenSnap] = await Promise.all([
+    get(threadRef),
+    get(ref(realtimeDb, `hiddenDirectMessages/${userId}/${threadId}`))
+  ]);
   if (!snap.exists()) return [];
   const raw = snap.val();
+  const hiddenMap = hiddenSnap.exists() ? hiddenSnap.val() || {} : {};
   return Object.entries(raw)
+    .filter(([id]) => !hiddenMap[id])
     .map(([id, value]) => mapDmMessage(id, value))
     .sort((a, b) => a.createdAt - b.createdAt);
 }
@@ -673,6 +678,29 @@ export async function sendGroupMessage({ groupId, senderId, message }) {
   return node.key;
 }
 
+export async function leaveGroupMembership({ groupId, userId }) {
+  const normalizedGroupId = String(groupId || '').trim();
+  if (!normalizedGroupId || !userId) {
+    throw new Error('Group ID and user are required.');
+  }
+  const realtimeDb = getRealtimeDb();
+  await update(ref(realtimeDb), {
+    [`groups/${normalizedGroupId}/members/${userId}`]: null,
+    [`groupPrefs/${userId}/${normalizedGroupId}/muted`]: null
+  });
+}
+
+export async function setGroupMuted({ groupId, userId, muted }) {
+  const normalizedGroupId = String(groupId || '').trim();
+  if (!normalizedGroupId || !userId) {
+    throw new Error('Group ID and user are required.');
+  }
+  const realtimeDb = getRealtimeDb();
+  await update(ref(realtimeDb), {
+    [`groupPrefs/${userId}/${normalizedGroupId}/muted`]: Boolean(muted)
+  });
+}
+
 export async function deleteGroupMessage({ groupId, userId, messageId }) {
   const normalizedGroupId = String(groupId || '').trim();
   if (!normalizedGroupId || !userId || !messageId) {
@@ -698,6 +726,15 @@ export async function deleteGroupMessage({ groupId, userId, messageId }) {
     firebaseUpdatedAt: Date.now()
   });
   await remove(messageRef);
+}
+
+export async function hideDirectMessageForMe({ userId, peerId, messageId }) {
+  if (!userId || !peerId || !messageId) {
+    throw new Error('Missing hide message parameters.');
+  }
+  const realtimeDb = getRealtimeDb();
+  const threadId = directThreadId(userId, peerId);
+  await set(ref(realtimeDb, `hiddenDirectMessages/${userId}/${threadId}/${messageId}`), true);
 }
 
 export async function startVoiceCallSession({ callerId, calleeId }) {
