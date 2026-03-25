@@ -11,10 +11,13 @@ import {
   deleteDirectMessage,
   editDirectMessage,
   listDirectMessages,
+  deleteRecentDirectChat,
   markRecentDirectChatRead,
   searchUsersByUsername,
   sendDirectMedia,
   sendDirectMessage,
+  setRecentDirectChatArchived,
+  setRecentDirectChatLocked,
   subscribeDirectMessages,
   subscribeRecentDirectChats,
   subscribeUserPresence
@@ -22,8 +25,8 @@ import {
 import { motion } from 'framer-motion';
 import {
   Loader2,
+  Lock,
   MessageCircle,
-  Paperclip,
   Phone,
   MoreVertical,
   Pencil,
@@ -61,6 +64,7 @@ export default function ChatDashboardPage() {
   const [peerPresenceLoading, setPeerPresenceLoading] = useState(false);
   const [peerAvatarFailed, setPeerAvatarFailed] = useState(false);
   const [openMessageMenuId, setOpenMessageMenuId] = useState(null);
+  const [recentMenu, setRecentMenu] = useState(null);
   const EDIT_WINDOW_MS = 15 * 60 * 1000;
   const searchWrapRef = useRef(null);
   const searchInputRef = useRef(null);
@@ -71,6 +75,16 @@ export default function ChatDashboardPage() {
       const target = e.target;
       if (target?.closest?.('[data-message-menu]')) return;
       setOpenMessageMenuId(null);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+
+  useEffect(() => {
+    const onDoc = (e) => {
+      const target = e.target;
+      if (target?.closest?.('[data-recent-menu]')) return;
+      setRecentMenu(null);
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
@@ -487,7 +501,21 @@ export default function ChatDashboardPage() {
                     <button
                       key={chat.threadId}
                       type="button"
-                      onClick={() => pickPeer(chat.peerId, chat.peerUsername)}
+                      onClick={() => {
+                        if (chat.locked) {
+                          setActionError('Chat is locked. Right click to unlock.');
+                          return;
+                        }
+                        pickPeer(chat.peerId, chat.peerUsername);
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setRecentMenu({
+                          x: e.clientX,
+                          y: e.clientY,
+                          chat
+                        });
+                      }}
                       className={cn(
                         'w-full rounded-xl border px-3 py-2 text-left transition-colors duration-150',
                         activeUserId.trim() === chat.peerId
@@ -496,7 +524,11 @@ export default function ChatDashboardPage() {
                       )}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <p className="truncate text-sm font-semibold text-amber-950 dark:text-slate-100">{chat.peerUsername}</p>
+                        <p className="flex min-w-0 items-center gap-2 truncate text-sm font-semibold text-amber-950 dark:text-slate-100">
+                          <span className="truncate">{chat.peerUsername}</span>
+                          {chat.locked && <Lock className="h-3.5 w-3.5 shrink-0 opacity-80" />}
+                          {chat.archived && <Archive className="h-3.5 w-3.5 shrink-0 opacity-80" />}
+                        </p>
                         {activeUserId.trim() !== chat.peerId && Number(chat.unreadCount || 0) > 0 && (
                           <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white dark:bg-sky-500">
                             {chat.unreadCount > 99 ? '99+' : chat.unreadCount}
@@ -517,6 +549,93 @@ export default function ChatDashboardPage() {
               </div>
             </div>
           </aside>
+
+          {recentMenu && (
+            <div
+              className="fixed inset-0 z-[120]"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setRecentMenu(null);
+              }}
+            >
+              <div
+                data-recent-menu
+                role="menu"
+                className="anim-pop fixed z-[130] min-w-[210px] overflow-hidden rounded-2xl border border-amber-200/90 bg-white py-1.5 shadow-xl shadow-amber-900/10 dark:border-navy-700/60 dark:bg-navy-950"
+                style={{
+                  left: Math.min(recentMenu.x, (typeof window !== 'undefined' ? window.innerWidth : recentMenu.x) - 220),
+                  top: Math.min(recentMenu.y, (typeof window !== 'undefined' ? window.innerHeight : recentMenu.y) - 220)
+                }}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-amber-950 transition-colors duration-150 hover:bg-amber-100 dark:text-slate-50 dark:hover:bg-navy-800/60"
+                  onClick={async () => {
+                    try {
+                      await setRecentDirectChatLocked({
+                        userId: user?.id,
+                        threadId: recentMenu.chat.threadId,
+                        locked: !recentMenu.chat.locked
+                      });
+                    } finally {
+                      setRecentMenu(null);
+                    }
+                  }}
+                >
+                  <Lock className="h-4 w-4 shrink-0 opacity-80" />
+                  {recentMenu.chat.locked ? 'Unlock chat' : 'Lock chat'}
+                </button>
+
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-amber-950 transition-colors duration-150 hover:bg-amber-100 dark:text-slate-50 dark:hover:bg-navy-800/60"
+                  onClick={async () => {
+                    try {
+                      await setRecentDirectChatArchived({
+                        userId: user?.id,
+                        threadId: recentMenu.chat.threadId,
+                        archived: !recentMenu.chat.archived
+                      });
+                    } finally {
+                      setRecentMenu(null);
+                    }
+                  }}
+                >
+                  <Archive className="h-4 w-4 shrink-0 opacity-80" />
+                  {recentMenu.chat.archived ? 'Unarchive chat' : 'Archive chat'}
+                </button>
+
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-700 transition-colors duration-150 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/50"
+                  onClick={async () => {
+                    if (
+                      typeof window !== 'undefined' &&
+                      !window.confirm('Delete this chat from recent list? This will not delete message history.')
+                    )
+                      return;
+                    try {
+                      await deleteRecentDirectChat({
+                        userId: user?.id,
+                        threadId: recentMenu.chat.threadId
+                      });
+                      if (activeUserId.trim() === recentMenu.chat.peerId) {
+                        clearPeer();
+                      }
+                    } finally {
+                      setRecentMenu(null);
+                    }
+                  }}
+                >
+                  <Trash2 className="h-4 w-4 shrink-0" />
+                  Delete chat
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Chat panel — fills remaining viewport */}
           <section className="card anim-fade-up flex min-h-0 flex-1 flex-col overflow-hidden p-0 [animation-delay:130ms] lg:min-h-0">
@@ -659,12 +778,12 @@ export default function ChatDashboardPage() {
                       className={cn(
                         'relative max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm shadow-sm sm:max-w-[70%]',
                         mine
-                          ? 'rounded-br-md border border-amber-400/50 bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-amber-600/25'
+                          ? 'rounded-br-md border border-amber-400/50 bg-gradient-to-br from-amber-500 to-amber-600 pt-7 text-white shadow-amber-600/25'
                           : 'rounded-bl-md border border-amber-200/80 bg-white text-amber-950 dark:border-navy-700/60 dark:bg-navy-950/80 dark:text-slate-50'
                       )}
                     >
                       {mine && (
-                        <div className="absolute left-1 top-1 z-10" data-message-menu>
+                        <div className="absolute left-2 top-2 z-10" data-message-menu>
                           <button
                             type="button"
                             className="rounded-md p-1.5 text-amber-50/95 transition hover:bg-white/15 hover:text-white"

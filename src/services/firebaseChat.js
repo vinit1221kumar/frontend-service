@@ -288,7 +288,9 @@ export function subscribeRecentDirectChats(userId, callback, limit = 30) {
         lastMessage: value.lastMessage || '',
         lastSenderId: value.lastSenderId || '',
         lastMessageAt: value.updatedAt || 0,
-        unreadCount: Number(value.unreadCount || 0)
+        unreadCount: Number(value.unreadCount || 0),
+        archived: Boolean(value.archived),
+        locked: Boolean(value.locked)
       }))
       .filter((item) => item.peerId)
       .sort((a, b) => b.lastMessageAt - a.lastMessageAt);
@@ -307,6 +309,28 @@ export async function markRecentDirectChatRead(userId, peerId) {
   await update(ref(realtimeDb, `recentDirectChats/${userId}/${threadId}`), {
     unreadCount: 0
   }).catch(() => undefined);
+}
+
+export async function deleteRecentDirectChat({ userId, threadId }) {
+  if (!userId || !threadId) return;
+  const realtimeDb = getRealtimeDb();
+  await remove(ref(realtimeDb, `recentDirectChats/${userId}/${threadId}`));
+}
+
+export async function setRecentDirectChatArchived({ userId, threadId, archived }) {
+  if (!userId || !threadId) return;
+  const realtimeDb = getRealtimeDb();
+  await update(ref(realtimeDb, `recentDirectChats/${userId}/${threadId}`), {
+    archived: Boolean(archived)
+  });
+}
+
+export async function setRecentDirectChatLocked({ userId, threadId, locked }) {
+  if (!userId || !threadId) return;
+  const realtimeDb = getRealtimeDb();
+  await update(ref(realtimeDb, `recentDirectChats/${userId}/${threadId}`), {
+    locked: Boolean(locked)
+  });
 }
 
 export async function listDirectMessages(userId, peerId) {
