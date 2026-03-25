@@ -8,6 +8,8 @@ import {
   ensureGroupMembership,
   leaveGroupMembership,
   listGroupMembers,
+  removeGroupMember,
+  setGroupPhoto,
   listGroupMessages,
   listUserGroups,
   sendGroupMessage as sendFirebaseGroupMessage,
@@ -15,7 +17,7 @@ import {
   subscribeGroupMessages
 } from '../services/firebaseChat';
 import { motion } from 'framer-motion';
-import { BellOff, LogOut, MessageSquare, MoreVertical, Search, Send, Trash2, UserPlus, Users } from 'lucide-react';
+import { BellOff, Camera, LogOut, MessageSquare, MoreVertical, Search, Send, Trash2, UserPlus, Users, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AppMainHeader } from '@/components/AppMainHeader';
 import { cn } from '@/lib/utils';
@@ -47,8 +49,13 @@ export default function GroupChatPage() {
   const [groupSearchOpen, setGroupSearchOpen] = useState(false);
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
   const [groupMuted, setGroupMuted] = useState(false);
+  const [membersModalOpen, setMembersModalOpen] = useState(false);
+  const [kickingMemberId, setKickingMemberId] = useState('');
+  const [updatingPhoto, setUpdatingPhoto] = useState(false);
+  const [groupPhotoUrl, setGroupPhotoUrl] = useState('');
   const groupSearchWrapRef = useRef(null);
   const groupMenuRef = useRef(null);
+  const groupPhotoInputRef = useRef(null);
 
   const isMember = !!user?.id && groupMembers.some((member) => member.id === user.id);
   const senderNamesById = groupMembers.reduce((acc, member) => {
@@ -164,6 +171,11 @@ export default function GroupChatPage() {
   }, [groupId, loadGroupMembers, membersRefreshTick]);
 
   useEffect(() => {
+    const selectedGroup = groupList.find((item) => item.id === groupId.trim());
+    setGroupPhotoUrl(selectedGroup?.photoUrl || '');
+  }, [groupList, groupId]);
+
+  useEffect(() => {
     if (!recentlyAddedMemberId) return;
     const timeout = setTimeout(() => setRecentlyAddedMemberId(''), 2200);
     return () => clearTimeout(timeout);
@@ -276,13 +288,61 @@ export default function GroupChatPage() {
   };
 
   const handleShowMembers = () => {
-    if (!groupMembers.length) {
-      setPanelSuccess('No members in this group.');
-    } else {
-      const names = groupMembers.map((m) => getMemberLabel(m)).join(', ');
-      setPanelSuccess(`Members: ${names}`);
-    }
+    if (!groupId.trim()) return;
+    setMembersModalOpen(true);
     setGroupMenuOpen(false);
+  };
+
+  const handleKickMember = async (member) => {
+    if (!groupId.trim() || !user?.id || !member?.id) return;
+    if (member.id === user.id) {
+      setPanelError('You cannot kick yourself. Use Leave group.');
+      return;
+    }
+    if (
+      typeof window !== 'undefined' &&
+      !window.confirm(`Kick ${member.username || member.id} from this group?`)
+    )
+      return;
+    setKickingMemberId(member.id);
+    setPanelError('');
+    setPanelSuccess('');
+    try {
+      await removeGroupMember({
+        groupId: groupId.trim(),
+        actorId: user.id,
+        memberId: member.id
+      });
+      setPanelSuccess(`${member.username || member.id} removed from group.`);
+      await Promise.all([loadGroupMembers(groupId.trim()), loadUserGroups()]);
+    } catch (err) {
+      setPanelError(err?.message || 'Could not kick member.');
+    } finally {
+      setKickingMemberId('');
+    }
+  };
+
+  const handleGroupPhotoPick = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !groupId.trim() || !user?.id) return;
+    setUpdatingPhoto(true);
+    setPanelError('');
+    setPanelSuccess('');
+    try {
+      const nextPhotoUrl = await setGroupPhoto({
+        groupId: groupId.trim(),
+        actorId: user.id,
+        file
+      });
+      setGroupPhotoUrl(nextPhotoUrl);
+      setPanelSuccess('Group photo updated.');
+      await loadUserGroups();
+    } catch (err) {
+      setPanelError(err?.message || 'Could not update group photo.');
+    } finally {
+      setUpdatingPhoto(false);
+    }
   };
 
   const handleToggleMuteGroup = async () => {
@@ -652,6 +712,118 @@ export default function GroupChatPage() {
         </section>
         </div>
       </motion.main>
+
+      {membersModalOpen && (
+        <div className="fixed inset-0 z-[150] bg-black/55 backdrop-blur-sm">
+          <div className="mx-auto flex h-full w-full max-w-2xl flex-col bg-white dark:bg-navy-950">
+            <div className="flex items-center justify-between border-b border-amber-200/70 px-4 py-3 dark:border-navy-700/40">
+              <div>
+                <p className="text-sm font-semibold text-amber-950 dark:text-slate-50">Group members</p>
+                <p className="text-xs text-amber-700/85 dark:text-slate-300/85">
+                  {groupId.trim() || 'No group selected'} • {groupMembers.length} members
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8"
+                onClick={() => setMembersModalOpen(false)}
+                aria-label="Close members panel"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3">
+              {membersLoading ? (
+                <p className="text-sm text-amber-800/80 dark:text-slate-300/85">Loading members…</p>
+              ) : groupMembers.length === 0 ? (
+                <p className="text-sm text-amber-800/80 dark:text-slate-300/85">No members in this group.</p>
+              ) : (
+                groupMembers.map((member) => (
+                  <div
+                    key={member.id}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-amber-200/70 bg-amber-50/70 px-3 py-2 dark:border-navy-700/40 dark:bg-navy-900/35"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-amber-950 dark:text-slate-100">{getMemberLabel(member)}</p>
+                      <p className="truncate text-xs text-amber-700/80 dark:text-slate-300/80">{member.id}</p>
+                    </div>
+                    {member.id !== user?.id && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        className="h-8 px-2.5 text-xs text-red-700 hover:text-red-700 dark:text-red-400"
+                        onClick={() => handleKickMember(member)}
+                        disabled={kickingMemberId === member.id}
+                      >
+                        {kickingMemberId === member.id ? 'Kicking…' : 'Kick member'}
+                      </Button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="border-t border-amber-200/70 px-4 py-3 dark:border-navy-700/40">
+              <input
+                ref={groupPhotoInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleGroupPhotoPick}
+              />
+              <div className="mb-3 flex items-center gap-3 rounded-xl border border-amber-200/70 bg-amber-50/70 px-3 py-2.5 dark:border-navy-700/40 dark:bg-navy-900/35">
+                {groupPhotoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={groupPhotoUrl} alt="Group" className="h-12 w-12 rounded-xl object-cover" />
+                ) : (
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-200/80 text-amber-800 dark:bg-navy-800/80 dark:text-slate-200">
+                    <Users className="h-5 w-5" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-amber-950 dark:text-slate-100">Group photo</p>
+                  <p className="truncate text-xs text-amber-700/80 dark:text-slate-300/80">
+                    {groupPhotoUrl ? 'Tap to change current photo' : 'No group photo yet'}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="h-8 shrink-0 px-2.5 text-xs"
+                  onClick={() => groupPhotoInputRef.current?.click()}
+                  disabled={!groupId.trim() || updatingPhoto}
+                >
+                  <Camera className="mr-1 h-3.5 w-3.5" />
+                  {updatingPhoto ? 'Uploading…' : groupPhotoUrl ? 'Change' : 'Add'}
+                </Button>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    setMembersModalOpen(false);
+                    setGroupSearchOpen(true);
+                  }}
+                  disabled={!groupId.trim()}
+                >
+                  <UserPlus className="mr-1.5 h-4 w-4" />
+                  Add new member
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => setMembersModalOpen(false)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

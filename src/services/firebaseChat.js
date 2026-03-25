@@ -1,6 +1,7 @@
 import {
   get,
   onChildChanged,
+  onChildRemoved,
   limitToLast,
   off,
   onChildAdded,
@@ -173,12 +174,13 @@ export async function listUserGroups(userId) {
     .map(([id, value]) => ({
       id,
       updatedAt: value?.updatedAt || 0,
+      photoUrl: value?.photoUrl || '',
       memberCount: Object.values(value?.members || {}).filter(Boolean).length,
       members: value?.members || {}
     }))
     .filter((group) => !!group.members[userId])
     .sort((a, b) => b.updatedAt - a.updatedAt)
-    .map(({ id, memberCount, updatedAt }) => ({ id, memberCount, updatedAt }));
+    .map(({ id, memberCount, updatedAt, photoUrl }) => ({ id, memberCount, updatedAt, photoUrl }));
 }
 
 export function subscribeUserPresence(userId, callback) {
@@ -364,11 +366,17 @@ export function subscribeDirectMessages(userId, peerId, callback) {
     if (!snap.exists()) return;
     callback(mapDmMessage(snap.key, snap.val()), 'changed');
   };
+  const handleRemoved = (snap) => {
+    if (!snap?.key) return;
+    callback({ _id: snap.key, id: snap.key }, 'removed');
+  };
   onChildAdded(threadRef, handleAdded);
   onChildChanged(threadRef, handleChanged);
+  onChildRemoved(threadRef, handleRemoved);
   return () => {
     off(threadRef, 'child_added', handleAdded);
     off(threadRef, 'child_changed', handleChanged);
+    off(threadRef, 'child_removed', handleRemoved);
   };
 }
 
@@ -531,15 +539,12 @@ export async function deleteDirectMessage({ userId, peerId, messageId }) {
   if (value.senderId !== userId) {
     throw new Error('You can only delete your own messages.');
   }
-  if (value.isDeleted) return;
+  if (value.isDeleted) {
+    await remove(messageRef);
+    return;
+  }
   const now = Date.now();
-  await update(messageRef, {
-    content: 'This message has been deleted',
-    isDeleted: true,
-    deletedAt: now,
-    deletedBy: userId,
-    updatedAt: now
-  });
+  await remove(messageRef);
 
   postMessageBackup({
     backupKey: `direct:${threadId}:${messageId}`,
@@ -702,6 +707,53 @@ export async function setGroupMuted({ groupId, userId, muted }) {
   await update(ref(realtimeDb), {
     [`groupPrefs/${userId}/${normalizedGroupId}/muted`]: Boolean(muted)
   });
+}
+
+export async function removeGroupMember({ groupId, actorId, memberId }) {
+  const normalizedGroupId = String(groupId || '').trim();
+  if (!normalizedGroupId || !actorId || !memberId) {
+    throw new Error('Group ID, actor, and member are required.');
+  }
+  const realtimeDb = getRealtimeDb();
+  const actorMembershipSnap = await get(ref(realtimeDb, `groups/${normalizedGroupId}/members/${actorId}`));
+  if (!actorMembershipSnap.exists() || !actorMembershipSnap.val()) {
+    throw new Error('Only group members can remove users.');
+  }
+  const targetMembershipSnap = await get(ref(realtimeDb, `groups/${normalizedGroupId}/members/${memberId}`));
+  if (!targetMembershipSnap.exists() || !targetMembershipSnap.val()) {
+    throw new Error('Member is not in this group.');
+  }
+  await update(ref(realtimeDb), {
+    [`groups/${normalizedGroupId}/members/${memberId}`]: null,
+    [`groups/${normalizedGroupId}/updatedAt`]: Date.now(),
+    [`groupPrefs/${memberId}/${normalizedGroupId}/muted`]: null
+  });
+}
+
+export async function setGroupPhoto({ groupId, actorId, file }) {
+  const normalizedGroupId = String(groupId || '').trim();
+  if (!normalizedGroupId || !actorId || !file) {
+    throw new Error('Group ID, actor, and photo file are required.');
+  }
+  const realtimeDb = getRealtimeDb();
+  const membershipSnap = await get(ref(realtimeDb, `groups/${normalizedGroupId}/members/${actorId}`));
+  if (!membershipSnap.exists() || !membershipSnap.val()) {
+    throw new Error('Only group members can change group photo.');
+  }
+
+  const storage = getFirebaseStorage();
+  const extension = file.name.includes('.') ? file.name.split('.').pop() : '';
+  const photoRef = storageRef(storage, `groupPhotos/${normalizedGroupId}/avatar${extension ? `.${extension}` : ''}`);
+  await uploadBytes(photoRef, file, { contentType: file.type || undefined });
+  const photoUrl = await getDownloadURL(photoRef);
+
+  await update(ref(realtimeDb), {
+    [`groups/${normalizedGroupId}/photoUrl`]: photoUrl,
+    [`groups/${normalizedGroupId}/photoUpdatedAt`]: Date.now(),
+    [`groups/${normalizedGroupId}/updatedAt`]: Date.now()
+  });
+
+  return photoUrl;
 }
 
 export async function deleteGroupMessage({ groupId, userId, messageId }) {
