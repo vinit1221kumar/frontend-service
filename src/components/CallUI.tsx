@@ -14,6 +14,7 @@ import {
   UserRound,
   Video,
   VideoOff,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuthContext } from "@/context/AuthContext";
@@ -371,7 +372,8 @@ export default function CallUI({
     clearSessionListeners();
 
     try {
-      const stream = await setupMedia(callMode);
+      const mode = callModeRef.current;
+      const stream = await setupMedia(mode);
       const peerConnection = setupPeerConnection(currentUserId, targetUserId);
       attachLocalTracks(peerConnection, stream);
 
@@ -380,7 +382,7 @@ export default function CallUI({
         callerId: currentUserId,
         calleeId: targetUserId,
         offer,
-        mode: callMode,
+        mode,
       });
 
       const unsubscribeAnswer = listenForAnswer(currentUserId, async (answer) => {
@@ -411,7 +413,6 @@ export default function CallUI({
     }
   }, [
     calleeId,
-    callMode,
     clearSessionListeners,
     currentUserId,
     hardCleanup,
@@ -420,6 +421,15 @@ export default function CallUI({
     setupPeerConnection,
     subscribeForRemoteIce,
   ]);
+
+  const startCallWithMode = useCallback(
+    async (mode: CallMode) => {
+      callModeRef.current = mode;
+      setCallMode(mode);
+      await beginCall();
+    },
+    [beginCall]
+  );
 
   const acceptIncomingCall = useCallback(async () => {
     if (!currentUserId || !incomingOffer) return;
@@ -616,80 +626,97 @@ export default function CallUI({
         )}
       </div>
 
-      <div
-        className={cn(
-          "grid gap-4 sm:grid-cols-2",
-          isEnhanced
-            ? "card border-amber-200/80 bg-white/80 p-4 dark:border-navy-700/50 dark:bg-navy-950/75"
-            : "rounded-lg border border-slate-200 p-4 dark:border-navy-700"
-        )}
-      >
-        <div className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Select user (username)</span>
-          <input
-            value={userQuery}
-            onChange={(event) => setUserQuery(event.target.value)}
-            placeholder="Search by username"
-            className={fieldClassName}
-          />
-          <div className="rounded-2xl border border-amber-200/60 bg-amber-50/70 p-2 dark:border-navy-700/50 dark:bg-navy-900/50">
+      <div className="grid gap-5 lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
+        {/* Left: chat-like user list */}
+        <aside className="card overflow-hidden border-amber-200/80 bg-white/80 p-0 dark:border-navy-700/50 dark:bg-navy-950/75">
+          <div className="border-b border-amber-200/60 bg-amber-50/50 px-4 py-3 dark:border-navy-700/40 dark:bg-navy-950/50">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-semibold text-amber-950 dark:text-slate-100">
+                <Users className="h-4 w-4 shrink-0 text-amber-600 dark:text-sky-400" />
+                Users
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="secondary"
+                  className="h-9 w-9 rounded-xl"
+                  disabled={isBusy || !currentUserId || !hasSelectedCallee}
+                  title="Voice call"
+                  aria-label="Voice call"
+                  onClick={() => startCallWithMode("audio")}
+                >
+                  <Phone className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="secondary"
+                  className="h-9 w-9 rounded-xl"
+                  disabled={isBusy || !currentUserId || !hasSelectedCallee}
+                  title="Video call"
+                  aria-label="Video call"
+                  onClick={() => startCallWithMode("video")}
+                >
+                  <Video className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            <input
+              value={userQuery}
+              onChange={(event) => setUserQuery(event.target.value)}
+              placeholder="Search username…"
+              className={cn(fieldClassName, "mt-3")}
+            />
+          </div>
+
+          <div className="max-h-[42vh] overflow-y-auto p-2 lg:max-h-none lg:flex-1">
             {userLoading ? (
-              <div className="px-2 py-1 text-xs text-amber-800/80 dark:text-slate-300/80">Searching…</div>
+              <div className="px-3 py-4 text-sm text-amber-800/80 dark:text-slate-300/80">Searching…</div>
             ) : userResults.length === 0 ? (
-              <div className="px-2 py-1 text-xs text-amber-800/70 dark:text-slate-300/75">No matches.</div>
+              <div className="px-3 py-4 text-sm text-amber-800/70 dark:text-slate-300/75">No users found.</div>
             ) : (
-              <div className="max-h-40 overflow-y-auto">
-                {userResults.map((u) => (
-                  <button
-                    key={u.id}
-                    type="button"
-                    className="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-amber-950 hover:bg-amber-100/80 dark:text-slate-50 dark:hover:bg-navy-800/60"
-                    onClick={() => {
-                      setCalleeId(u.id);
-                      setCalleeUsername(u.username);
-                      setUserQuery(u.username);
-                      setUserResults([]);
-                    }}
-                  >
-                    <span className="truncate">{u.username}</span>
-                    <span className="font-mono text-[11px] opacity-60">{u.id.slice(0, 6)}…</span>
-                  </button>
-                ))}
+              <div className="space-y-1">
+                {userResults.map((u) => {
+                  const selected = calleeId.trim() === u.id;
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition-colors",
+                        selected
+                          ? "border-amber-300/80 bg-amber-100/70 dark:border-navy-600/60 dark:bg-navy-900/50"
+                          : "border-amber-200/70 bg-white/70 hover:bg-amber-50 dark:border-navy-700/50 dark:bg-navy-950/40 dark:hover:bg-navy-900/50"
+                      )}
+                      onClick={() => {
+                        setCalleeId(u.id);
+                        setCalleeUsername(u.username);
+                      }}
+                    >
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-200/80 text-xs font-bold text-amber-900 dark:bg-navy-800/80 dark:text-slate-100">
+                        {(u.username || "?").slice(0, 1).toUpperCase()}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold text-amber-950 dark:text-slate-100">
+                          {u.username}
+                        </span>
+                        <span className="block truncate font-mono text-[11px] opacity-60">{u.id.slice(0, 6)}…</span>
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
 
-          <div className="text-xs text-slate-600 dark:text-slate-300">
-            Selected:{" "}
-            <span className="font-semibold text-amber-950 dark:text-slate-50">
-              {calleeUsername || (calleeId ? "User selected" : "None")}
-            </span>
+          <div className="border-t border-amber-200/60 bg-white/70 px-4 py-3 text-xs dark:border-navy-700/40 dark:bg-navy-950/60 dark:text-slate-200">
+            Selected: <span className="font-semibold">{calleeUsername || (calleeId ? "User selected" : "None")}</span>
           </div>
+        </aside>
 
-          <details className="mt-1">
-            <summary className="cursor-pointer text-xs font-semibold text-amber-800/80 dark:text-slate-300/80">
-              Advanced: enter callee ID
-            </summary>
-            <input
-              value={calleeId}
-              onChange={(event) => setCalleeId(event.target.value)}
-              placeholder="Enter callee user ID"
-              className={cn(fieldClassName, "mt-2")}
-            />
-          </details>
-        </div>
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Call mode</span>
-          <select
-            value={callMode}
-            onChange={(event) => setCallMode(event.target.value as CallMode)}
-            className={fieldClassName}
-          >
-            <option value="video">Video call</option>
-            <option value="audio">Voice call</option>
-          </select>
-        </label>
-      </div>
+        {/* Right: existing controls + streams */}
+        <div className="min-w-0">
 
       <div
         className={cn(
@@ -870,6 +897,8 @@ export default function CallUI({
               </div>
             </div>
           )}
+        </div>
+      </div>
         </div>
       </div>
     </section>

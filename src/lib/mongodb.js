@@ -1,7 +1,8 @@
 import { MongoClient } from 'mongodb';
 
-const uri = process.env.MONGODB_URI;
-const dbName = process.env.MONGODB_DB_NAME || 'd_lite_backup';
+const uri = process.env.NEXT_PUBLIC_MONGODB_URI;
+
+const dbName = process.env.NEXT_PUBLIC_MONGODB_DB_NAME || 'd_lite_backup';
 
 let client;
 let clientPromise;
