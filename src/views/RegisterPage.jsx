@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { AppHeaderMenu } from '@/components/AppHeaderMenu';
 import { AuthCardBranding } from '@/components/AuthCardBranding';
 import { AuthPageBackground } from '@/components/AuthPageBackground';
+import { toFirebaseAuthMessage } from '@/lib/firebaseAuthErrors';
 
 export default function RegisterPage() {
   const { register, loginWithGoogle, isAuthenticated, user, loading: authLoading, logout } = useAuth();
@@ -29,7 +30,7 @@ export default function RegisterPage() {
       await register(username, email, password);
       router.push('/dashboard');
     } catch (err) {
-      setError('Registration failed');
+      setError(toFirebaseAuthMessage(err, 'register'));
     } finally {
       setSubmitting(false);
     }
@@ -41,8 +42,8 @@ export default function RegisterPage() {
     try {
       await loginWithGoogle();
       router.push('/dashboard');
-    } catch {
-      setError('Google sign-in failed. Please try again.');
+    } catch (err) {
+      setError(toFirebaseAuthMessage(err, 'google'));
     } finally {
       setGoogleSubmitting(false);
     }
