@@ -388,7 +388,8 @@ export default function CallUI({
       const unsubscribeAnswer = listenForAnswer(currentUserId, async (answer) => {
         if (!answer || !peerConnectionRef.current) return;
         await applyRemoteDescription(answer);
-        setStatus("connecting");
+        // Avoid overriding "connected" if ICE/DTLS finishes quickly.
+        setStatus((prev) => (prev === "connected" ? prev : "connecting"));
       });
 
       const unsubscribeRejected = listenForRejection(currentUserId, async (rejected) => {
@@ -453,7 +454,8 @@ export default function CallUI({
       setPeerId(callerId);
       setIncomingOffer(null);
       setCallMode(incomingOffer.mode);
-      setStatus("connecting");
+      // Avoid overriding "connected" if onConnectionStateChange already fired.
+      setStatus((prev) => (prev === "connected" ? prev : "connecting"));
     } catch (acceptError) {
       console.error("Failed to accept call", acceptError);
       setError(acceptError instanceof Error ? acceptError.message : "Failed to accept call.");
@@ -561,6 +563,13 @@ export default function CallUI({
       hardCleanup().catch(() => undefined);
     };
   }, [currentUserId, hardCleanup]);
+
+  // If the peer disconnects / call ends remotely, ensure we stop camera/mic too.
+  useEffect(() => {
+    if (status === "ended" || status === "failed") {
+      hardCleanup().catch(() => undefined);
+    }
+  }, [status, hardCleanup]);
 
   const canToggleCamera = Boolean(localStreamRef.current?.getVideoTracks().length);
   const hasIncomingCall = Boolean(incomingOffer);

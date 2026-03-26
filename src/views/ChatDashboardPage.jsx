@@ -198,7 +198,13 @@ export default function ChatDashboardPage() {
       return;
     }
 
-    markRecentDirectChatRead(user.id, activeUserId.trim()).catch(() => undefined);
+    const peerId = activeUserId.trim();
+    markRecentDirectChatRead(user.id, peerId)
+      .then(() => {
+        // Keep UI consistent: unread badge should disappear immediately.
+        setRecentChats((prev) => prev.map((chat) => (chat.peerId === peerId ? { ...chat, unreadCount: 0 } : chat)));
+      })
+      .catch(() => undefined);
     setMessagesLoading(true);
     setMessageLoadError('');
 
@@ -228,7 +234,13 @@ export default function ChatDashboardPage() {
           seen.add(msg._id);
           setMessages((prev) => [...prev, msg]);
           if (msg.senderId && msg.senderId !== user.id) {
-            markRecentDirectChatRead(user.id, activeUserId.trim()).catch(() => undefined);
+            markRecentDirectChatRead(user.id, activeUserId.trim())
+              .then(() => {
+                setRecentChats((prev) =>
+                  prev.map((chat) => (chat.peerId === activeUserId.trim() ? { ...chat, unreadCount: 0 } : chat))
+                );
+              })
+              .catch(() => undefined);
           }
         });
       } catch {

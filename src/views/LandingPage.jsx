@@ -79,11 +79,6 @@ export default function LandingPage() {
                 Features
               </a>
             </Button>
-            <Button asChild variant="ghost" size="sm">
-              <a href="#preview" className="no-underline">
-                Preview
-              </a>
-            </Button>
           </nav>
 
           <div className="flex shrink-0 items-center gap-2">
@@ -493,7 +488,10 @@ export default function LandingPage() {
             </div>
           </div>
         </div>
-        <p className="mt-10 text-center text-xs text-slate-500 dark:text-slate-600">© {new Date().getFullYear()} D-Lite</p>
+        <div className="mt-8 flex flex-col items-center gap-1 text-center text-xs text-slate-500 dark:text-slate-600">
+          <p>Contact the developer: <a className="underline underline-offset-2 hover:text-slate-900 dark:hover:text-slate-200" href="mailto:developer@d-lite.com">developer@d-lite.com</a></p>
+          <p>© {new Date().getFullYear()} D-Lite</p>
+        </div>
       </footer>
     </div>
   );
