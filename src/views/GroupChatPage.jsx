@@ -12,7 +12,9 @@ import {
   setGroupPhoto,
   listGroupMessages,
   listUserGroups,
+  markGroupThreadRead,
   sendGroupMessage as sendFirebaseGroupMessage,
+  setGroupMemberRole,
   setGroupMuted,
   subscribeGroupMessages
 } from '../services/firebaseChat';
@@ -56,8 +58,26 @@ export default function GroupChatPage() {
   const groupSearchWrapRef = useRef(null);
   const groupMenuRef = useRef(null);
   const groupPhotoInputRef = useRef(null);
+  const messagesWrapRef = useRef(null);
+  const shouldAutoScrollRef = useRef(true);
+
+  // FIX: auto-scroll only if user is near bottom (don’t interrupt when scrolling up).
+  useEffect(() => {
+    const el = messagesWrapRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const thresholdPx = 140;
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      shouldAutoScrollRef.current = distanceFromBottom < thresholdPx;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
 
   const isMember = !!user?.id && groupMembers.some((member) => member.id === user.id);
+  const myRole = groupMembers.find((m) => m.id === user?.id)?.role || 'member';
+  const isGroupAdmin = myRole === 'admin';
   const senderNamesById = groupMembers.reduce((acc, member) => {
     acc[member.id] = member.username || member.id;
     return acc;
@@ -101,6 +121,8 @@ export default function GroupChatPage() {
     (async () => {
       try {
         await ensureGroupMembership({ groupId: groupId.trim(), userId: user.id });
+        // FIX: Mark messages as read when opening a group (DB read receipts).
+        await markGroupThreadRead({ groupId: groupId.trim(), userId: user.id });
         const history = await listGroupMessages(groupId.trim());
         if (cancelled) return;
         history.forEach((item) => seen.add(item._id));
@@ -110,6 +132,10 @@ export default function GroupChatPage() {
           if (seen.has(msg._id)) return;
           seen.add(msg._id);
           setMessages((prev) => [...prev, msg]);
+          // FIX: If group is open, mark received messages as read.
+          if (msg.senderId && msg.senderId !== user.id) {
+            markGroupThreadRead({ groupId: groupId.trim(), userId: user.id }).catch(() => undefined);
+          }
         });
       } catch (err) {
         if (!cancelled) {
@@ -124,6 +150,14 @@ export default function GroupChatPage() {
       unsubscribe();
     };
   }, [groupId, user?.id, messagesRefreshTick]);
+
+  useEffect(() => {
+    if (!shouldAutoScrollRef.current) return;
+    const el = messagesWrapRef.current;
+    if (!el) return;
+    // FIX: Scroll to latest message on send/receive when user is near bottom.
+    el.scrollTop = el.scrollHeight;
+  }, [messages.length]);
 
   const loadGroupMembers = useCallback(async (id) => {
     const normalized = String(id || '').trim();
@@ -299,6 +333,11 @@ export default function GroupChatPage() {
       setPanelError('You cannot kick yourself. Use Leave group.');
       return;
     }
+    // FIX: Only ADMIN can remove members (securely enforced in backend too).
+    if (!isGroupAdmin) {
+      setPanelError('Only admins can remove members.');
+      return;
+    }
     if (
       typeof window !== 'undefined' &&
       !window.confirm(`Kick ${member.username || member.id} from this group?`)
@@ -319,6 +358,33 @@ export default function GroupChatPage() {
       setPanelError(err?.message || 'Could not kick member.');
     } finally {
       setKickingMemberId('');
+    }
+  };
+
+  const handleMakeAdmin = async (member) => {
+    if (!groupId.trim() || !user?.id || !member?.id) return;
+    if (member.id === user.id) return;
+    if (!isGroupAdmin) {
+      setPanelError('Only admins can assign new admins.');
+      return;
+    }
+    if (member.role === 'admin') return;
+
+    if (typeof window !== 'undefined' && !window.confirm(`Make ${member.username || member.id} an admin?`)) return;
+
+    setPanelError('');
+    setPanelSuccess('');
+    try {
+      await setGroupMemberRole({
+        groupId: groupId.trim(),
+        actorId: user.id,
+        memberId: member.id,
+        role: 'admin'
+      });
+      setPanelSuccess(`${member.username || member.id} is now an admin.`);
+      await Promise.all([loadGroupMembers(groupId.trim()), loadUserGroups()]);
+    } catch (err) {
+      setPanelError(err?.message || 'Could not set admin role.');
     }
   };
 
@@ -611,7 +677,10 @@ export default function GroupChatPage() {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain bg-amber-50/20 px-4 py-4 dark:bg-navy-900/25">
+          <div
+            ref={messagesWrapRef}
+            className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain bg-amber-50/20 px-4 py-4 dark:bg-navy-900/25"
+          >
             {messagesLoadError && (
               <div className="rounded-xl border border-red-400/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
                 <p>{messagesLoadError}</p>
@@ -637,6 +706,7 @@ export default function GroupChatPage() {
               const senderName =
                 m.senderId === user?.id ? user?.username || 'You' : senderNamesById[m.senderId] || 'Group member';
               const mine = m.senderId === user?.id;
+              const myId = user?.id;
 
               return (
                 <motion.div
@@ -655,9 +725,23 @@ export default function GroupChatPage() {
                     )}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <div className={cn('text-xs font-medium', mine ? 'text-amber-100/90' : 'text-slate-600 dark:text-slate-300')}>
-                        {senderName}
-                      </div>
+                    <div className={cn('text-xs font-medium', mine ? 'text-amber-100/90' : 'text-slate-600 dark:text-slate-300')}>
+                      {senderName}
+                      {!mine && myId && (
+                        <div
+                          className={cn(
+                            'mt-0.5 text-[10px] font-semibold tracking-wide',
+                            m.readBy?.[myId]
+                              ? 'text-emerald-900'
+                              : m.deliveredBy?.[myId]
+                                ? 'text-sky-900'
+                                : 'text-slate-500'
+                          )}
+                        >
+                          {m.readBy?.[myId] ? 'Read' : m.deliveredBy?.[myId] ? 'Delivered' : 'Sent'}
+                        </div>
+                      )}
+                    </div>
                       {mine && (
                         <button
                           type="button"
@@ -750,17 +834,30 @@ export default function GroupChatPage() {
                       <p className="truncate text-sm font-medium text-amber-950 dark:text-slate-100">{getMemberLabel(member)}</p>
                       <p className="truncate text-xs text-amber-700/80 dark:text-slate-300/80">{member.id}</p>
                     </div>
-                    {member.id !== user?.id && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        className="h-8 px-2.5 text-xs text-red-700 hover:text-red-700 dark:text-red-400"
-                        onClick={() => handleKickMember(member)}
-                        disabled={kickingMemberId === member.id}
-                      >
-                        {kickingMemberId === member.id ? 'Kicking…' : 'Kick member'}
-                      </Button>
+                    {isGroupAdmin && member.id !== user?.id && (
+                      <div className="flex items-center gap-2">
+                        {member.role !== 'admin' && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="h-8 px-2.5 text-xs"
+                            onClick={() => handleMakeAdmin(member)}
+                          >
+                            Make admin
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="h-8 px-2.5 text-xs text-red-700 hover:text-red-700 dark:text-red-400"
+                          onClick={() => handleKickMember(member)}
+                          disabled={kickingMemberId === member.id}
+                        >
+                          {kickingMemberId === member.id ? 'Kicking…' : 'Kick member'}
+                        </Button>
+                      </div>
                     )}
                   </div>
                 ))

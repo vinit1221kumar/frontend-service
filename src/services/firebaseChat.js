@@ -23,6 +23,44 @@ function directThreadId(userA, userB) {
   return [userA, userB].sort().join('__');
 }
 
+function getGroupMemberRole(membershipValue) {
+  // Backward compatibility:
+  // - Legacy shape: `members/{uid}: true` => treat as `member`
+  // - New shape: `members/{uid}: { role: 'admin'|'member' }`
+  if (membershipValue === true) return 'member';
+  if (membershipValue && typeof membershipValue === 'object') {
+    const role = membershipValue.role;
+    if (role === 'admin' || role === 'member') return role;
+  }
+  return 'member';
+}
+
+function sanitizeStorageExtension(ext) {
+  // FIX: Storage paths should not include weird characters coming from filenames.
+  const clean = String(ext || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+  return clean.slice(0, 10);
+}
+
+async function withRetry(fn, retries = 2) {
+  // FIX: retry transient upload/download failures (network blips / eventual consistency).
+  // Keeping retry logic local avoids changing APIs or architecture.
+  let lastErr;
+  for (let i = 0; i <= retries; i += 1) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      // small exponential backoff
+      const delay = 250 * Math.pow(2, i);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 function mapDmMessage(id, value) {
   return {
     _id: id,
@@ -39,7 +77,11 @@ function mapDmMessage(id, value) {
     updatedAt: value.updatedAt || null,
     isDeleted: Boolean(value.isDeleted),
     deletedAt: value.deletedAt || null,
-    deletedBy: value.deletedBy || null
+    deletedBy: value.deletedBy || null,
+    // FIX: delivered receipts (backward compatible)
+    deliveredBy: value.deliveredBy || {},
+    // FIX: read receipts (backward compatible: absent => unread for that user)
+    readBy: value.readBy || {}
   };
 }
 
@@ -50,8 +92,93 @@ function mapGroupMessage(id, value) {
     senderId: value.senderId,
     message: value.message,
     groupId: value.groupId,
-    createdAt: value.createdAt || Date.now()
+    createdAt: value.createdAt || Date.now(),
+    // FIX: delivered receipts (backward compatible)
+    deliveredBy: value.deliveredBy || {},
+    // FIX: group read receipts (backward compatible)
+    readBy: value.readBy || {}
   };
+}
+
+/**
+ * FIX: Upload + persist user profile photo in a stable per-UID location.
+ * Storage: userPhotos/{uid}/avatar.<ext>
+ * Realtime DB: users/{uid}/photoURL
+ */
+export async function setUserProfilePhoto({ userId, file }) {
+  if (!userId || !file) throw new Error('User ID and photo file are required.');
+  if (!String(file.type || '').startsWith('image/')) throw new Error('Only image files are supported.');
+  if (file.size > 5 * 1024 * 1024) throw new Error('Photo must be ≤ 5MB.');
+
+  const realtimeDb = getRealtimeDb();
+  const storage = getFirebaseStorage();
+  const extension = sanitizeStorageExtension(file.name.includes('.') ? file.name.split('.').pop() : '');
+  const photoRef = storageRef(storage, `userPhotos/${userId}/avatar${extension ? `.${extension}` : ''}`);
+
+  // FIX: uploadBytes/getDownloadURL occasionally fail under transient network errors; retry.
+  await withRetry(() => uploadBytes(photoRef, file, { contentType: file.type || undefined }));
+  const photoURL = await withRetry(() => getDownloadURL(photoRef));
+
+  await update(ref(realtimeDb, `users/${userId}`), {
+    photoURL,
+    photoUpdatedAt: Date.now()
+  });
+
+  return photoURL;
+}
+
+/**
+ * FIX: Mark last N direct messages as read for a user.
+ * Minimal approach: update readBy on existing messages (limit=100) to avoid heavy scans.
+ */
+export async function markDirectThreadRead({ userId, peerId, limit = 100 }) {
+  if (!userId || !peerId) return;
+  const realtimeDb = getRealtimeDb();
+  const threadId = directThreadId(userId, peerId);
+  const snap = await get(query(ref(realtimeDb, `dmMessages/${threadId}`), limitToLast(limit)));
+  if (!snap.exists()) return;
+  const raw = snap.val() || {};
+
+  const updates = {};
+  Object.entries(raw).forEach(([messageId, value]) => {
+    const v = value || {};
+    // Only mark messages addressed to me (or already in the thread) as read.
+    if (v.receiverId === userId && !(v.readBy && v.readBy[userId])) {
+      // FIX: write delivered receipts too (receiver opened chat => message is delivered).
+      updates[`dmMessages/${threadId}/${messageId}/deliveredBy/${userId}`] = true;
+      updates[`dmMessages/${threadId}/${messageId}/deliveredAt/${userId}`] = Date.now();
+      updates[`dmMessages/${threadId}/${messageId}/readBy/${userId}`] = true;
+      updates[`dmMessages/${threadId}/${messageId}/readAt/${userId}`] = Date.now();
+    }
+  });
+  if (Object.keys(updates).length === 0) return;
+  await update(ref(realtimeDb), updates);
+}
+
+/**
+ * FIX: Mark last N group messages as read for a user.
+ */
+export async function markGroupThreadRead({ groupId, userId, limit = 150 }) {
+  const normalizedGroupId = String(groupId || '').trim();
+  if (!normalizedGroupId || !userId) return;
+  const realtimeDb = getRealtimeDb();
+  const snap = await get(query(ref(realtimeDb, `groupMessages/${normalizedGroupId}`), limitToLast(limit)));
+  if (!snap.exists()) return;
+  const raw = snap.val() || {};
+
+  const updates = {};
+  Object.entries(raw).forEach(([messageId, value]) => {
+    const v = value || {};
+    if (!(v.readBy && v.readBy[userId])) {
+      // FIX: write delivered receipts too.
+      updates[`groupMessages/${normalizedGroupId}/${messageId}/deliveredBy/${userId}`] = true;
+      updates[`groupMessages/${normalizedGroupId}/${messageId}/deliveredAt/${userId}`] = Date.now();
+      updates[`groupMessages/${normalizedGroupId}/${messageId}/readBy/${userId}`] = true;
+      updates[`groupMessages/${normalizedGroupId}/${messageId}/readAt/${userId}`] = Date.now();
+    }
+  });
+  if (Object.keys(updates).length === 0) return;
+  await update(ref(realtimeDb), updates);
 }
 
 export async function searchUsersByUsername(term, excludeUserId) {
@@ -71,6 +198,22 @@ export async function searchUsersByUsername(term, excludeUserId) {
     }));
 }
 
+export async function getUserProfileById(userId) {
+  // FIX: Provide display data for call UI by fetching from the canonical users/{uid} node.
+  if (!userId) return null;
+  const realtimeDb = getRealtimeDb();
+  const snap = await get(ref(realtimeDb, `users/${userId}`));
+  if (!snap.exists()) return null;
+  const v = snap.val() || {};
+  return {
+    id: userId,
+    uid: v.uid || userId,
+    username: v.username || v.email?.split('@')[0] || 'User',
+    email: v.email || '',
+    photoURL: v.photoURL || ''
+  };
+}
+
 function normalizeUsername(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -88,11 +231,40 @@ export async function ensureGroupMembership({ groupId, userId }) {
   if (!normalizedGroupId || !userId) return;
   const realtimeDb = getRealtimeDb();
   const now = Date.now();
-  await update(ref(realtimeDb), {
-    [`groups/${normalizedGroupId}/id`]: normalizedGroupId,
-    [`groups/${normalizedGroupId}/members/${userId}`]: true,
-    [`groups/${normalizedGroupId}/updatedAt`]: now
-  });
+
+  // FIX: First joiner becomes ADMIN. Backward compatible with legacy members stored as `true`.
+  const groupSnap = await get(ref(realtimeDb, `groups/${normalizedGroupId}`));
+  const groupVal = groupSnap.exists() ? groupSnap.val() || {} : {};
+  const members = groupVal.members || {};
+
+  if (!groupSnap.exists()) {
+    await update(ref(realtimeDb), {
+      [`groups/${normalizedGroupId}/id`]: normalizedGroupId,
+      [`groups/${normalizedGroupId}/createdBy`]: userId,
+      [`groups/${normalizedGroupId}/members/${userId}`]: { role: 'admin' },
+      [`groups/${normalizedGroupId}/updatedAt`]: now
+    });
+    return;
+  }
+
+  const currentMembership = members[userId];
+  // New member
+  if (currentMembership === undefined || currentMembership === null) {
+    await update(ref(realtimeDb), {
+      [`groups/${normalizedGroupId}/id`]: normalizedGroupId,
+      [`groups/${normalizedGroupId}/members/${userId}`]: { role: 'member' },
+      [`groups/${normalizedGroupId}/updatedAt`]: now
+    });
+    return;
+  }
+
+  // Convert legacy `true` to {role:'member'} without overwriting existing roles.
+  if (currentMembership === true) {
+    await update(ref(realtimeDb), {
+      [`groups/${normalizedGroupId}/members/${userId}`]: { role: 'member' },
+      [`groups/${normalizedGroupId}/updatedAt`]: now
+    });
+  }
 }
 
 export async function addGroupMemberByUsername({ groupId, username, addedById }) {
@@ -120,7 +292,8 @@ export async function addGroupMemberByUsername({ groupId, username, addedById })
   const now = Date.now();
   await update(ref(realtimeDb), {
     [`groups/${normalizedGroupId}/id`]: normalizedGroupId,
-    [`groups/${normalizedGroupId}/members/${targetUser.uid}`]: true,
+    // FIX: Added members default to MEMBER role.
+    [`groups/${normalizedGroupId}/members/${targetUser.uid}`]: { role: 'member' },
     [`groups/${normalizedGroupId}/updatedAt`]: now,
     ...(addedById ? { [`groups/${normalizedGroupId}/lastAddedBy`]: addedById } : {})
   });
@@ -159,7 +332,14 @@ export async function listGroupMembers(groupId) {
 
   return Object.keys(members)
     .filter((id) => members[id])
-    .map((id) => userMap[id] || { id, username: id })
+    .map((id) => {
+      const base = userMap[id] || { id, username: id };
+      // FIX: expose admin/member role in the members list.
+      return {
+        ...base,
+        role: getGroupMemberRole(members[id])
+      };
+    })
     .sort((a, b) => a.username.localeCompare(b.username));
 }
 
@@ -474,14 +654,15 @@ export async function sendDirectMedia({ senderId, receiverId, file }) {
   const now = Date.now();
   const node = push(ref(realtimeDb, `dmMessages/${threadId}`));
   const messageId = node.key;
-  const extension = file.name.includes('.') ? file.name.split('.').pop() : '';
+  const extension = sanitizeStorageExtension(file.name.includes('.') ? file.name.split('.').pop() : '');
   const mediaRef = storageRef(
     storage,
     `dmMedia/${threadId}/${messageId}${extension ? `.${extension}` : ''}`
   );
 
-  await uploadBytes(mediaRef, file, { contentType: file.type || undefined });
-  const mediaUrl = await getDownloadURL(mediaRef);
+  // FIX: retry upload/download for transient Storage failures.
+  await withRetry(() => uploadBytes(mediaRef, file, { contentType: file.type || undefined }));
+  const mediaUrl = await withRetry(() => getDownloadURL(mediaRef));
 
   await set(node, {
     senderId,
@@ -692,10 +873,45 @@ export async function leaveGroupMembership({ groupId, userId }) {
     throw new Error('Group ID and user are required.');
   }
   const realtimeDb = getRealtimeDb();
+
+  // FIX: Avoid leaving the group if the user is the last admin.
+  const groupSnap = await get(ref(realtimeDb, `groups/${normalizedGroupId}`));
+  if (!groupSnap.exists()) throw new Error('Group not found.');
+  const groupValue = groupSnap.val() || {};
+  const members = groupValue.members || {};
+  const createdBy = groupValue.createdBy || null;
+
+  const currentMembership = members[userId];
+  if (!currentMembership) return;
+
+  const myRole = getGroupMemberRole(currentMembership);
+  const myIsAdmin = myRole === 'admin' || (createdBy && createdBy === userId);
+
+  const adminIds = Object.keys(members).filter((id) => {
+    const r = getGroupMemberRole(members[id]);
+    return r === 'admin' || (createdBy && createdBy === id);
+  });
+  const willBeLastAdmin = myIsAdmin && adminIds.length <= 1;
+  if (willBeLastAdmin) {
+    throw new Error('You cannot leave while you are the last admin. Assign another admin first.');
+  }
+
   await update(ref(realtimeDb), {
     [`groups/${normalizedGroupId}/members/${userId}`]: null,
+    [`groups/${normalizedGroupId}/updatedAt`]: Date.now(),
     [`groupPrefs/${userId}/${normalizedGroupId}/muted`]: null
   });
+
+  // Transfer createdBy if needed.
+  if (createdBy && createdBy === userId) {
+    const nextAdmin = adminIds.filter((id) => id !== userId)[0];
+    if (nextAdmin) {
+      await update(ref(realtimeDb), {
+        [`groups/${normalizedGroupId}/createdBy`]: nextAdmin,
+        [`groups/${normalizedGroupId}/updatedAt`]: Date.now()
+      });
+    }
+  }
 }
 
 export async function setGroupMuted({ groupId, userId, muted }) {
@@ -715,18 +931,97 @@ export async function removeGroupMember({ groupId, actorId, memberId }) {
     throw new Error('Group ID, actor, and member are required.');
   }
   const realtimeDb = getRealtimeDb();
-  const actorMembershipSnap = await get(ref(realtimeDb, `groups/${normalizedGroupId}/members/${actorId}`));
-  if (!actorMembershipSnap.exists() || !actorMembershipSnap.val()) {
-    throw new Error('Only group members can remove users.');
+
+  // FIX: Enforce admin-only removal with backward compatible membership shapes.
+  const groupSnap = await get(ref(realtimeDb, `groups/${normalizedGroupId}`));
+  if (!groupSnap.exists()) throw new Error('Group not found.');
+  const groupValue = groupSnap.val() || {};
+  const members = groupValue.members || {};
+  const createdBy = groupValue.createdBy || null;
+
+  const actorMembership = members[actorId];
+  if (!actorMembership) throw new Error('Only group members can remove users.');
+
+  const actorRole = getGroupMemberRole(actorMembership);
+  const actorIsAdmin = actorRole === 'admin' || (createdBy && createdBy === actorId);
+  if (!actorIsAdmin) throw new Error('Only admins can remove members.');
+
+  const targetMembership = members[memberId];
+  if (!targetMembership) throw new Error('Member is not in this group.');
+
+  // Prevent removing the last admin.
+  const adminIds = Object.keys(members).filter((id) => {
+    const r = getGroupMemberRole(members[id]);
+    return r === 'admin' || (createdBy && createdBy === id);
+  });
+  const targetIsAdmin = adminIds.includes(memberId);
+  const remainingAdminCount = targetIsAdmin ? adminIds.length - 1 : adminIds.length;
+  if (targetIsAdmin && remainingAdminCount <= 0) {
+    throw new Error('You cannot remove the last admin. Assign another admin first.');
   }
-  const targetMembershipSnap = await get(ref(realtimeDb, `groups/${normalizedGroupId}/members/${memberId}`));
-  if (!targetMembershipSnap.exists() || !targetMembershipSnap.val()) {
-    throw new Error('Member is not in this group.');
-  }
+
   await update(ref(realtimeDb), {
     [`groups/${normalizedGroupId}/members/${memberId}`]: null,
     [`groups/${normalizedGroupId}/updatedAt`]: Date.now(),
     [`groupPrefs/${memberId}/${normalizedGroupId}/muted`]: null
+  });
+
+  // If creator/admin removed, transfer `createdBy` to any remaining admin for legacy compatibility.
+  if (createdBy && createdBy === memberId) {
+    const nextAdmin = adminIds.filter((id) => id !== memberId)[0];
+    if (nextAdmin) {
+      await update(ref(realtimeDb), {
+        [`groups/${normalizedGroupId}/createdBy`]: nextAdmin,
+        [`groups/${normalizedGroupId}/updatedAt`]: Date.now()
+      });
+    }
+  }
+}
+
+export async function setGroupMemberRole({ groupId, actorId, memberId, role }) {
+  const normalizedGroupId = String(groupId || '').trim();
+  const normalizedRole = role === 'admin' ? 'admin' : 'member';
+  if (!normalizedGroupId || !actorId || !memberId) {
+    throw new Error('Group ID, actor, and member are required.');
+  }
+
+  if (normalizedRole !== 'admin' && normalizedRole !== 'member') {
+    throw new Error('Invalid role.');
+  }
+
+  const realtimeDb = getRealtimeDb();
+  const groupSnap = await get(ref(realtimeDb, `groups/${normalizedGroupId}`));
+  if (!groupSnap.exists()) throw new Error('Group not found.');
+
+  const groupValue = groupSnap.val() || {};
+  const members = groupValue.members || {};
+  const createdBy = groupValue.createdBy || null;
+
+  const actorMembership = members[actorId];
+  if (!actorMembership) throw new Error('Only group members can assign roles.');
+
+  const actorRole = getGroupMemberRole(actorMembership);
+  const actorIsAdmin = actorRole === 'admin' || (createdBy && createdBy === actorId);
+  if (!actorIsAdmin) throw new Error('Only admins can assign new admins.');
+
+  if (!members[memberId]) throw new Error('Member is not in this group.');
+
+  if (normalizedRole === 'member') {
+    // Prevent demoting the last admin.
+    const adminIds = Object.keys(members).filter((id) => {
+      const r = getGroupMemberRole(members[id]);
+      return r === 'admin' || (createdBy && createdBy === id);
+    });
+    const targetIsAdmin = adminIds.includes(memberId);
+    const remainingAdminCount = targetIsAdmin ? adminIds.length - 1 : adminIds.length;
+    if (targetIsAdmin && remainingAdminCount <= 0) {
+      throw new Error('You cannot demote the last admin.');
+    }
+  }
+
+  await update(ref(realtimeDb), {
+    [`groups/${normalizedGroupId}/members/${memberId}`]: { role: normalizedRole },
+    [`groups/${normalizedGroupId}/updatedAt`]: Date.now()
   });
 }
 
@@ -742,10 +1037,11 @@ export async function setGroupPhoto({ groupId, actorId, file }) {
   }
 
   const storage = getFirebaseStorage();
-  const extension = file.name.includes('.') ? file.name.split('.').pop() : '';
+  const extension = sanitizeStorageExtension(file.name.includes('.') ? file.name.split('.').pop() : '');
   const photoRef = storageRef(storage, `groupPhotos/${normalizedGroupId}/avatar${extension ? `.${extension}` : ''}`);
-  await uploadBytes(photoRef, file, { contentType: file.type || undefined });
-  const photoUrl = await getDownloadURL(photoRef);
+  // FIX: retry upload/download for transient Storage failures.
+  await withRetry(() => uploadBytes(photoRef, file, { contentType: file.type || undefined }));
+  const photoUrl = await withRetry(() => getDownloadURL(photoRef));
 
   await update(ref(realtimeDb), {
     [`groups/${normalizedGroupId}/photoUrl`]: photoUrl,

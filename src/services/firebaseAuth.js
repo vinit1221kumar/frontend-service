@@ -16,7 +16,10 @@ function toProfile(authUser, profile = {}) {
     id: authUser.uid,
     uid: authUser.uid,
     email: authUser.email || '',
-    username
+    username,
+    // FIX: ensure photoURL is carried through auth snapshot to avoid mismatched avatars.
+    // Backward compatible: if missing, consumers should fallback.
+    photoURL: profile.photoURL || ''
   };
 }
 
@@ -30,6 +33,8 @@ async function ensureUserProfile({ realtimeDb, user, fallbackEmail, fallbackUser
     uid: user.uid,
     username: fallbackUsername || user.displayName || user.email?.split('@')[0] || 'User',
     email: fallbackEmail || user.email || '',
+    // FIX: store photoURL in the canonical profile location for consistent reads across app.
+    photoURL: user.photoURL || '',
     createdAt: Date.now()
   };
   await set(profileRef, profile);

@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuthContext } from "@/context/AuthContext";
-import { searchUsersByUsername } from "@/services/firebaseChat";
+import { getUserProfileById, searchUsersByUsername } from "@/services/firebaseChat";
 import {
   acceptCall,
   clearIceCandidates,
@@ -121,6 +121,8 @@ export default function CallUI({
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  // FIX: Voice calls need a real audio element to play the remote audio track.
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -139,6 +141,7 @@ export default function CallUI({
 
   const [calleeId, setCalleeId] = useState(calleeParam);
   const [calleeUsername, setCalleeUsername] = useState<string>("");
+  const [peerDisplayName, setPeerDisplayName] = useState<string>("");
   const [userQuery, setUserQuery] = useState("");
   const [userResults, setUserResults] = useState<{ id: string; username: string }[]>([]);
   const [userLoading, setUserLoading] = useState(false);
@@ -205,6 +208,34 @@ export default function CallUI({
     peerIdRef.current = peerId;
   }, [peerId]);
 
+  useEffect(() => {
+    // FIX: Show display name/email instead of raw userId in call UI.
+    const id = incomingOffer?.fromUserId || peerId;
+    if (!id) {
+      setPeerDisplayName("");
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const profile = await getUserProfileById(id);
+        if (cancelled) return;
+        const next =
+          profile?.username ||
+          (profile?.email ? profile.email.split("@")[0] : "") ||
+          "";
+        setPeerDisplayName(next);
+      } catch {
+        if (!cancelled) setPeerDisplayName("");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [incomingOffer?.fromUserId, peerId]);
+
   const clearSessionListeners = useCallback(() => {
     sessionUnsubRefs.current.forEach((unsubscribe) => unsubscribe());
     sessionUnsubRefs.current = [];
@@ -220,6 +251,7 @@ export default function CallUI({
   const clearMediaElements = useCallback(() => {
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
   }, []);
 
   const resetLocalState = useCallback(() => {
@@ -273,6 +305,10 @@ export default function CallUI({
     remoteStreamRef.current = remoteStream;
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = remoteStream;
+    }
+    // FIX: Voice calls require attaching remote stream to an <audio> element.
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = remoteStream;
     }
 
     const peerConnection = createPeerConnection({
@@ -834,7 +870,7 @@ export default function CallUI({
               Peer
             </div>
             <div className="mt-1 truncate text-sm font-semibold text-amber-950 dark:text-slate-50">
-              {incomingOffer?.fromUserId || peerId || "Waiting"}
+              {peerDisplayName || incomingOffer?.fromUserId || peerId || "Waiting"}
             </div>
           </div>
         </div>
@@ -889,6 +925,8 @@ export default function CallUI({
               </div>
             )}
           </div>
+          {/* FIX: keep audio element mounted so voice calls reliably play remote audio */}
+          <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
           {activeMode === "video" ? (
             <video
               ref={remoteVideoRef}

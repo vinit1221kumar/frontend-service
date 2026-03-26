@@ -7,6 +7,7 @@ import { Camera, KeyRound, Pencil, Trash2, X } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { setUserProfilePhoto } from '@/services/firebaseChat';
 
 /**
  * Portals to document.body so modals are not clipped by app-shell overflow-hidden.
@@ -52,7 +53,6 @@ function Modal({ title, titleId = 'profile-modal-title', children, onClose, clas
 /**
  * Avatar → account menu. Edit profile / Change photo / Password → same slide-in Modal (portal).
  */
-const AVATAR_STORAGE_KEY = 'd-lite-avatar';
 
 export function ProfileMenu() {
   const { user } = useAuth();
@@ -76,13 +76,10 @@ export function ProfileMenu() {
   const [editMsg, setEditMsg] = useState('');
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(AVATAR_STORAGE_KEY);
-      if (stored) setAvatarUrl(stored);
-    } catch {
-      /* ignore */
-    }
-  }, []);
+    // FIX: Never use a shared/global localStorage avatar key (it causes photo mix-ups between users).
+    // Source of truth is users/{uid}/photoURL via auth snapshot.
+    setAvatarUrl(user?.photoURL || null);
+  }, [user?.uid, user?.photoURL]);
 
   useEffect(() => {
     setDisplayName(user?.username || '');
@@ -178,30 +175,22 @@ export function ProfileMenu() {
   const handleHiddenFileChange = (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file) return;
-    if (!file.type.startsWith('image/')) return;
-    if (file.size > 2 * 1024 * 1024) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const url = String(reader.result);
-      setAvatarUrl(url);
+    if (!file || !user?.uid) return;
+    // FIX: Upload to Firebase Storage + persist photoURL per UID so all clients see the correct image.
+    (async () => {
       try {
-        window.localStorage.setItem(AVATAR_STORAGE_KEY, url);
+        const url = await setUserProfilePhoto({ userId: user.uid, file });
+        setAvatarUrl(url);
+        setPhotoOpen(false);
       } catch {
-        /* ignore */
+        // Minimal UX: silently ignore for now (existing UI has no toast system).
       }
-      setPhotoOpen(false);
-    };
-    reader.readAsDataURL(file);
+    })();
   };
 
   const handleDeletePhoto = () => {
     setAvatarUrl(null);
-    try {
-      window.localStorage.removeItem(AVATAR_STORAGE_KEY);
-    } catch {
-      /* ignore */
-    }
+    // FIX: Do not touch shared local storage; photoURL lives in Firebase.
     setPhotoOpen(false);
   };
 

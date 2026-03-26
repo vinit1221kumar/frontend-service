@@ -12,6 +12,7 @@ import {
   set,
 } from "firebase/database";
 import { getRealtimeDb } from "@/lib/firebase";
+import { getFirebaseAuth } from "@/services/firebaseClient";
 import { AnswerPayload, IceCandidatePayload, OfferPayload } from "@/types/call";
 
 function userCallRef(userId: string) {
@@ -22,12 +23,88 @@ function log(message: string, payload?: unknown) {
   console.log(`[call] ${message}`, payload ?? "");
 }
 
+function getAuthUidSafe() {
+  try {
+    return getFirebaseAuth()?.currentUser?.uid;
+  } catch {
+    return undefined;
+  }
+}
+
+function logWriteAttempt(params: {
+  op: "set" | "update" | "remove" | "push";
+  dbRef: { toString?: () => string } | string;
+  payload?: unknown;
+}) {
+  const uid = getAuthUidSafe();
+  const dbPath = typeof params.dbRef === "string" ? params.dbRef : params.dbRef?.toString?.() ?? "unknown-path";
+  console.log(`[call][WRITE] op=${params.op} path=${dbPath} authUid=${uid}`, {
+    payload: params.payload ?? null,
+    authenticated: Boolean(uid),
+  });
+}
+
+function logPermissionHint(op: string, path: string) {
+  const uid = getAuthUidSafe();
+  console.error(`[call][WRITE] Permission denied suspected. op=${op} path=${path} authUid=${uid}`);
+  console.error(
+    `[call][WRITE] Rule hint: check Realtime DB security rules allow ${
+      uid ? "authenticated user" : "unauthenticated"
+    } to ${op} on ${path}. If using ownership-based rules, ensure userId in path matches auth.uid.`
+  );
+}
+
 async function clearPeerSignalState(userId: string, peerUserId: string) {
+  const offerRef = child(userCallRef(userId), "offer");
+  const answerRef = child(userCallRef(userId), "answer");
+  const rejectedRef = child(userCallRef(userId), "rejected");
+  const candidatesRef = child(userCallRef(userId), `candidates/${peerUserId}`);
+
   await Promise.all([
-    remove(child(userCallRef(userId), "offer")),
-    remove(child(userCallRef(userId), "answer")),
-    remove(child(userCallRef(userId), "rejected")),
-    remove(child(userCallRef(userId), `candidates/${peerUserId}`)),
+    (async () => {
+      const path = offerRef.toString();
+      logWriteAttempt({ op: "remove", dbRef: offerRef, payload: null });
+      try {
+        await remove(offerRef);
+      } catch (e) {
+        console.error(`[call][WRITE-FAIL] remove offer failed path=${path}`, e);
+        logPermissionHint("remove", path);
+        throw e;
+      }
+    })(),
+    (async () => {
+      const path = answerRef.toString();
+      logWriteAttempt({ op: "remove", dbRef: answerRef, payload: null });
+      try {
+        await remove(answerRef);
+      } catch (e) {
+        console.error(`[call][WRITE-FAIL] remove answer failed path=${path}`, e);
+        logPermissionHint("remove", path);
+        throw e;
+      }
+    })(),
+    (async () => {
+      const path = rejectedRef.toString();
+      logWriteAttempt({ op: "remove", dbRef: rejectedRef, payload: null });
+      try {
+        await remove(rejectedRef);
+      } catch (e) {
+        console.error(`[call][WRITE-FAIL] remove rejected failed path=${path}`, e);
+        logPermissionHint("remove", path);
+        throw e;
+      }
+    })(),
+    (async () => {
+      const path = candidatesRef.toString();
+      logWriteAttempt({ op: "remove", dbRef: candidatesRef, payload: null });
+      try {
+        await remove(candidatesRef);
+      } catch (e) {
+        console.error(`[call][WRITE-FAIL] remove candidates failed path=${path}`, e);
+        logPermissionHint("remove", path);
+        throw e;
+      }
+    })(),
   ]);
 }
 
@@ -50,7 +127,16 @@ export async function startCall(params: {
     clearPeerSignalState(callerId, calleeId),
     clearPeerSignalState(calleeId, callerId),
   ]);
-  await set(child(userCallRef(calleeId), "offer"), offerPayload);
+  const offerOutRef = child(userCallRef(calleeId), "offer");
+  const offerOutPath = offerOutRef.toString();
+  logWriteAttempt({ op: "set", dbRef: offerOutRef, payload: offerPayload });
+  try {
+    await set(offerOutRef, offerPayload);
+  } catch (e) {
+    console.error(`[call][WRITE-FAIL] set offer failed path=${offerOutPath}`, e);
+    logPermissionHint("set", offerOutPath);
+    throw e;
+  }
 }
 
 export function listenForIncomingCall(
@@ -80,13 +166,63 @@ export async function acceptCall(params: {
     createdAt: Date.now(),
   };
   log("acceptCall -> write answer", { userId, callerId });
+  const rejectedRef = child(userCallRef(callerId), "rejected");
+  const candRef = child(userCallRef(callerId), `candidates/${userId}`);
   await Promise.all([
-    remove(child(userCallRef(callerId), "rejected")),
-    remove(child(userCallRef(callerId), `candidates/${userId}`)),
+    (async () => {
+      const path = rejectedRef.toString();
+      logWriteAttempt({ op: "remove", dbRef: rejectedRef, payload: null });
+      try {
+        await remove(rejectedRef);
+      } catch (e) {
+        console.error(`[call][WRITE-FAIL] remove rejected failed path=${path}`, e);
+        logPermissionHint("remove", path);
+        throw e;
+      }
+    })(),
+    (async () => {
+      const path = candRef.toString();
+      logWriteAttempt({ op: "remove", dbRef: candRef, payload: null });
+      try {
+        await remove(candRef);
+      } catch (e) {
+        console.error(`[call][WRITE-FAIL] remove candidates failed path=${path}`, e);
+        logPermissionHint("remove", path);
+        throw e;
+      }
+    })(),
   ]);
-  await set(child(userCallRef(callerId), "answer"), payload);
-  await remove(child(userCallRef(userId), "offer"));
-  await remove(child(userCallRef(userId), "rejected"));
+  const answerRef = child(userCallRef(callerId), "answer");
+  const answerPath = answerRef.toString();
+  logWriteAttempt({ op: "set", dbRef: answerRef, payload });
+  try {
+    await set(answerRef, payload);
+  } catch (e) {
+    console.error(`[call][WRITE-FAIL] set answer failed path=${answerPath}`, e);
+    logPermissionHint("set", answerPath);
+    throw e;
+  }
+  const offerRef = child(userCallRef(userId), "offer");
+  const offerPath = offerRef.toString();
+  logWriteAttempt({ op: "remove", dbRef: offerRef, payload: null });
+  try {
+    await remove(offerRef);
+  } catch (e) {
+    console.error(`[call][WRITE-FAIL] remove offer failed path=${offerPath}`, e);
+    logPermissionHint("remove", offerPath);
+    throw e;
+  }
+
+  const rejRef = child(userCallRef(userId), "rejected");
+  const rejPath = rejRef.toString();
+  logWriteAttempt({ op: "remove", dbRef: rejRef, payload: null });
+  try {
+    await remove(rejRef);
+  } catch (e) {
+    console.error(`[call][WRITE-FAIL] remove rejected failed path=${rejPath}`, e);
+    logPermissionHint("remove", rejPath);
+    throw e;
+  }
 }
 
 export function listenForAnswer(
@@ -110,11 +246,29 @@ export async function publishIceCandidate(params: {
 }) {
   const { targetUserId, fromUserId, candidate } = params;
   const candidatesRef = child(userCallRef(targetUserId), `candidates/${fromUserId}`);
-  await set(push(candidatesRef), candidate);
+  const outRef = push(candidatesRef);
+  const path = outRef.toString();
+  logWriteAttempt({ op: "set", dbRef: outRef, payload: candidate });
+  try {
+    await set(outRef, candidate);
+  } catch (e) {
+    console.error(`[call][WRITE-FAIL] set ice candidate failed path=${path}`, e);
+    logPermissionHint("set", path);
+    throw e;
+  }
 }
 
 export async function clearIceCandidates(userId: string, fromUserId: string) {
-  await remove(child(userCallRef(userId), `candidates/${fromUserId}`));
+  const cRef = child(userCallRef(userId), `candidates/${fromUserId}`);
+  const path = cRef.toString();
+  logWriteAttempt({ op: "remove", dbRef: cRef, payload: null });
+  try {
+    await remove(cRef);
+  } catch (e) {
+    console.error(`[call][WRITE-FAIL] remove ice candidates failed path=${path}`, e);
+    logPermissionHint("remove", path);
+    throw e;
+  }
 }
 
 export function listenForIceCandidates(params: {
@@ -137,12 +291,42 @@ export function listenForIceCandidates(params: {
 export async function rejectCall(params: { userId: string; callerId: string }) {
   const { userId, callerId } = params;
   log("rejectCall", { userId, callerId });
-  await remove(child(userCallRef(userId), "offer"));
-  await remove(child(userCallRef(userId), `candidates/${callerId}`));
-  await set(child(userCallRef(callerId), "rejected"), {
+  const offerRef = child(userCallRef(userId), "offer");
+  const offerPath = offerRef.toString();
+  logWriteAttempt({ op: "remove", dbRef: offerRef, payload: null });
+  try {
+    await remove(offerRef);
+  } catch (e) {
+    console.error(`[call][WRITE-FAIL] remove offer failed path=${offerPath}`, e);
+    logPermissionHint("remove", offerPath);
+    throw e;
+  }
+
+  const candRef = child(userCallRef(userId), `candidates/${callerId}`);
+  const candPath = candRef.toString();
+  logWriteAttempt({ op: "remove", dbRef: candRef, payload: null });
+  try {
+    await remove(candRef);
+  } catch (e) {
+    console.error(`[call][WRITE-FAIL] remove candidates failed path=${candPath}`, e);
+    logPermissionHint("remove", candPath);
+    throw e;
+  }
+
+  const rejRef = child(userCallRef(callerId), "rejected");
+  const rejPath = rejRef.toString();
+  const rejectedPayload = {
     byUserId: userId,
     createdAt: Date.now(),
-  });
+  };
+  logWriteAttempt({ op: "set", dbRef: rejRef, payload: rejectedPayload });
+  try {
+    await set(rejRef, rejectedPayload);
+  } catch (e) {
+    console.error(`[call][WRITE-FAIL] set rejected failed path=${rejPath}`, e);
+    logPermissionHint("set", rejPath);
+    throw e;
+  }
 }
 
 export function listenForRejection(
@@ -166,12 +350,72 @@ export function listenForRejection(
 export async function endCall(params: { userId: string; peerUserId?: string | null }) {
   const { userId, peerUserId } = params;
   log("endCall", { userId, peerUserId });
-  const tasks: Promise<void>[] = [remove(userCallRef(userId))];
+  const tasks: Promise<void>[] = [
+    (async () => {
+      const outRef = userCallRef(userId);
+      const path = outRef.toString();
+      logWriteAttempt({ op: "remove", dbRef: outRef, payload: null });
+      try {
+        await remove(outRef);
+      } catch (e) {
+        console.error(`[call][WRITE-FAIL] remove calls/${userId} failed path=${path}`, e);
+        logPermissionHint("remove", path);
+        throw e;
+      }
+    })(),
+  ];
   if (peerUserId) {
-    tasks.push(remove(child(userCallRef(peerUserId), "offer")));
-    tasks.push(remove(child(userCallRef(peerUserId), "answer")));
-    tasks.push(remove(child(userCallRef(peerUserId), `candidates/${userId}`)));
-    tasks.push(remove(child(userCallRef(peerUserId), "rejected")));
+    const pUserRef = userCallRef(peerUserId);
+    tasks.push(
+      (async () => {
+        const outRef = child(pUserRef, "offer");
+        const path = outRef.toString();
+        logWriteAttempt({ op: "remove", dbRef: outRef, payload: null });
+        try {
+          await remove(outRef);
+        } catch (e) {
+          console.error(`[call][WRITE-FAIL] remove offer failed path=${path}`, e);
+          logPermissionHint("remove", path);
+          throw e;
+        }
+      })(),
+      (async () => {
+        const outRef = child(pUserRef, "answer");
+        const path = outRef.toString();
+        logWriteAttempt({ op: "remove", dbRef: outRef, payload: null });
+        try {
+          await remove(outRef);
+        } catch (e) {
+          console.error(`[call][WRITE-FAIL] remove answer failed path=${path}`, e);
+          logPermissionHint("remove", path);
+          throw e;
+        }
+      })(),
+      (async () => {
+        const outRef = child(pUserRef, `candidates/${userId}`);
+        const path = outRef.toString();
+        logWriteAttempt({ op: "remove", dbRef: outRef, payload: null });
+        try {
+          await remove(outRef);
+        } catch (e) {
+          console.error(`[call][WRITE-FAIL] remove candidates failed path=${path}`, e);
+          logPermissionHint("remove", path);
+          throw e;
+        }
+      })(),
+      (async () => {
+        const outRef = child(pUserRef, "rejected");
+        const path = outRef.toString();
+        logWriteAttempt({ op: "remove", dbRef: outRef, payload: null });
+        try {
+          await remove(outRef);
+        } catch (e) {
+          console.error(`[call][WRITE-FAIL] remove rejected failed path=${path}`, e);
+          logPermissionHint("remove", path);
+          throw e;
+        }
+      })()
+    );
   }
   await Promise.all(tasks);
 }

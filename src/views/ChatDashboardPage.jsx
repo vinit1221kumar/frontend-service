@@ -13,8 +13,10 @@ import {
   hideDirectMessageForMe,
   listDirectMessages,
   deleteRecentDirectChat,
+  markDirectThreadRead,
   markRecentDirectChatRead,
   searchUsersByUsername,
+  sendDirectMedia,
   sendDirectMessage,
   setRecentDirectChatArchived,
   setRecentDirectChatLocked,
@@ -71,6 +73,22 @@ export default function ChatDashboardPage() {
   const searchWrapRef = useRef(null);
   const searchInputRef = useRef(null);
   const mediaInputRef = useRef(null);
+  const messagesWrapRef = useRef(null);
+  const shouldAutoScrollRef = useRef(true);
+
+  // FIX: auto-scroll only if user is near bottom (don’t interrupt when scrolling up).
+  useEffect(() => {
+    const el = messagesWrapRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const thresholdPx = 140;
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      shouldAutoScrollRef.current = distanceFromBottom < thresholdPx;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
 
   useEffect(() => {
     const onDoc = (e) => {
@@ -199,6 +217,8 @@ export default function ChatDashboardPage() {
     }
 
     const peerId = activeUserId.trim();
+    // FIX: Mark messages as read when opening a chat (DB read receipts).
+    markDirectThreadRead({ userId: user.id, peerId }).catch(() => undefined);
     markRecentDirectChatRead(user.id, peerId)
       .then(() => {
         // Keep UI consistent: unread badge should disappear immediately.
@@ -234,6 +254,8 @@ export default function ChatDashboardPage() {
           seen.add(msg._id);
           setMessages((prev) => [...prev, msg]);
           if (msg.senderId && msg.senderId !== user.id) {
+            // FIX: If chat is open, mark as read immediately on receive.
+            markDirectThreadRead({ userId: user.id, peerId }).catch(() => undefined);
             markRecentDirectChatRead(user.id, activeUserId.trim())
               .then(() => {
                 setRecentChats((prev) =>
@@ -256,6 +278,14 @@ export default function ChatDashboardPage() {
       unsubscribe();
     };
   }, [user?.id, activeUserId, historyRefreshTick]);
+
+  useEffect(() => {
+    if (!shouldAutoScrollRef.current) return;
+    const el = messagesWrapRef.current;
+    if (!el) return;
+    // FIX: Scroll to latest message on send/receive when user is near bottom.
+    el.scrollTop = el.scrollHeight;
+  }, [messages.length]);
 
   const sendMessage = async (e) => {
     e.preventDefault();
@@ -768,7 +798,10 @@ export default function ChatDashboardPage() {
               </div>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain bg-amber-50/20 px-3 py-3 dark:bg-navy-900/25 sm:px-4 sm:py-4">
+            <div
+              ref={messagesWrapRef}
+              className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain bg-amber-50/20 px-3 py-3 dark:bg-navy-900/25 sm:px-4 sm:py-4"
+            >
               {messageLoadError && (
                 <div className="rounded-xl border border-red-400/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
                   <p>{messageLoadError}</p>
@@ -792,6 +825,7 @@ export default function ChatDashboardPage() {
 
               {messages.map((m, idx) => {
                 const mine = m.senderId === user?.id;
+                const peerKey = activeUserId.trim();
                 const createdAt = Number(m.createdAt || 0);
                 const canEditDelete = !m.isDeleted && createdAt && Date.now() - createdAt <= EDIT_WINDOW_MS;
                 const peerLabel = activeUserId.trim() ? peerUsername || peerShort : 'Peer';
@@ -820,6 +854,20 @@ export default function ChatDashboardPage() {
                           )}
                         >
                           {senderLabel}
+                          {mine && (
+                            <div
+                              className={cn(
+                                'mt-0.5 text-[10px] font-semibold tracking-wide',
+                                m.readBy?.[peerKey]
+                                  ? 'text-emerald-100/95'
+                                  : m.deliveredBy?.[peerKey]
+                                    ? 'text-sky-100/95'
+                                    : 'text-white/70'
+                              )}
+                            >
+                              {m.readBy?.[peerKey] ? 'Read' : m.deliveredBy?.[peerKey] ? 'Delivered' : 'Sent'}
+                            </div>
+                          )}
                         </div>
                         {mine && (
                           <div className="relative -mr-1" data-message-menu>
