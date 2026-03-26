@@ -54,6 +54,13 @@ function logPermissionHint(op: string, path: string) {
   );
 }
 
+function isPermissionDeniedError(e: unknown) {
+  const code = (e as any)?.code;
+  const message = String((e as any)?.message || '').toLowerCase();
+  // Firebase commonly uses codes like: "permission-denied" / "PERMISSION_DENIED"
+  return code === 'permission-denied' || code === 'PERMISSION_DENIED' || message.includes('permission denied');
+}
+
 async function clearPeerSignalState(userId: string, peerUserId: string) {
   // FIX: disambiguate which Promise.all is running (useful when stack shows only index).
   console.log('[call][WRITE] clearPeerSignalState start', {
@@ -75,6 +82,8 @@ async function clearPeerSignalState(userId: string, peerUserId: string) {
       } catch (e) {
         console.error(`[call][WRITE-FAIL] remove offer failed path=${path}`, e);
         logPermissionHint("remove", path);
+        // FIX: cleanup is best-effort; permission denied should not abort call flow.
+        if (isPermissionDeniedError(e)) return;
         throw e;
       }
     })(),
@@ -86,6 +95,8 @@ async function clearPeerSignalState(userId: string, peerUserId: string) {
       } catch (e) {
         console.error(`[call][WRITE-FAIL] remove answer failed path=${path}`, e);
         logPermissionHint("remove", path);
+        // FIX: cleanup is best-effort; permission denied should not abort call flow.
+        if (isPermissionDeniedError(e)) return;
         throw e;
       }
     })(),
@@ -97,6 +108,8 @@ async function clearPeerSignalState(userId: string, peerUserId: string) {
       } catch (e) {
         console.error(`[call][WRITE-FAIL] remove rejected failed path=${path}`, e);
         logPermissionHint("remove", path);
+        // FIX: cleanup is best-effort; permission denied should not abort call flow.
+        if (isPermissionDeniedError(e)) return;
         throw e;
       }
     })(),
@@ -108,6 +121,8 @@ async function clearPeerSignalState(userId: string, peerUserId: string) {
       } catch (e) {
         console.error(`[call][WRITE-FAIL] remove candidates failed path=${path}`, e);
         logPermissionHint("remove", path);
+        // FIX: cleanup is best-effort; permission denied should not abort call flow.
+        if (isPermissionDeniedError(e)) return;
         throw e;
       }
     })(),
@@ -189,6 +204,8 @@ export async function acceptCall(params: {
       } catch (e) {
         console.error(`[call][WRITE-FAIL] remove rejected failed path=${path}`, e);
         logPermissionHint("remove", path);
+        // FIX: cleanup is best-effort; permission denied should not abort call flow.
+        if (isPermissionDeniedError(e)) return;
         throw e;
       }
     })(),
@@ -200,6 +217,8 @@ export async function acceptCall(params: {
       } catch (e) {
         console.error(`[call][WRITE-FAIL] remove candidates failed path=${path}`, e);
         logPermissionHint("remove", path);
+        // FIX: cleanup is best-effort; permission denied should not abort call flow.
+        if (isPermissionDeniedError(e)) return;
         throw e;
       }
     })(),
@@ -372,6 +391,8 @@ export async function endCall(params: { userId: string; peerUserId?: string | nu
       } catch (e) {
         console.error(`[call][WRITE-FAIL] remove calls/${userId} failed path=${path}`, e);
         logPermissionHint("remove", path);
+        // FIX: cleanup is best-effort; permission denied should not abort call cleanup.
+        if (isPermissionDeniedError(e)) return;
         throw e;
       }
     })(),
@@ -388,6 +409,8 @@ export async function endCall(params: { userId: string; peerUserId?: string | nu
         } catch (e) {
           console.error(`[call][WRITE-FAIL] remove offer failed path=${path}`, e);
           logPermissionHint("remove", path);
+          // FIX: cleanup is best-effort; permission denied should not abort call cleanup.
+          if (isPermissionDeniedError(e)) return;
           throw e;
         }
       })(),
@@ -400,6 +423,8 @@ export async function endCall(params: { userId: string; peerUserId?: string | nu
         } catch (e) {
           console.error(`[call][WRITE-FAIL] remove answer failed path=${path}`, e);
           logPermissionHint("remove", path);
+          // FIX: cleanup is best-effort; permission denied should not abort call cleanup.
+          if (isPermissionDeniedError(e)) return;
           throw e;
         }
       })(),
@@ -412,6 +437,8 @@ export async function endCall(params: { userId: string; peerUserId?: string | nu
         } catch (e) {
           console.error(`[call][WRITE-FAIL] remove candidates failed path=${path}`, e);
           logPermissionHint("remove", path);
+          // FIX: cleanup is best-effort; permission denied should not abort call cleanup.
+          if (isPermissionDeniedError(e)) return;
           throw e;
         }
       })(),
@@ -424,6 +451,8 @@ export async function endCall(params: { userId: string; peerUserId?: string | nu
         } catch (e) {
           console.error(`[call][WRITE-FAIL] remove rejected failed path=${path}`, e);
           logPermissionHint("remove", path);
+          // FIX: cleanup is best-effort; permission denied should not abort call cleanup.
+          if (isPermissionDeniedError(e)) return;
           throw e;
         }
       })()
