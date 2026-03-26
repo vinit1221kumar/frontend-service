@@ -55,6 +55,12 @@ function logPermissionHint(op: string, path: string) {
 }
 
 async function clearPeerSignalState(userId: string, peerUserId: string) {
+  // FIX: disambiguate which Promise.all is running (useful when stack shows only index).
+  console.log('[call][WRITE] clearPeerSignalState start', {
+    userId,
+    peerUserId,
+    authUid: getAuthUidSafe()
+  });
   const offerRef = child(userCallRef(userId), "offer");
   const answerRef = child(userCallRef(userId), "answer");
   const rejectedRef = child(userCallRef(userId), "rejected");
@@ -166,6 +172,12 @@ export async function acceptCall(params: {
     createdAt: Date.now(),
   };
   log("acceptCall -> write answer", { userId, callerId });
+  // FIX: disambiguate which Promise.all is running (useful when stack shows only index).
+  console.log('[call][WRITE] acceptCall clear removals start', {
+    userId,
+    callerId,
+    authUid: getAuthUidSafe()
+  });
   const rejectedRef = child(userCallRef(callerId), "rejected");
   const candRef = child(userCallRef(callerId), `candidates/${userId}`);
   await Promise.all([
