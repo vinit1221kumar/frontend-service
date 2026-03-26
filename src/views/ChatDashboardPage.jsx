@@ -729,13 +729,13 @@ export default function ChatDashboardPage() {
                 {activeUserId.trim() && user?.id ? (
                   <>
                     <Button asChild size="sm" variant="secondary">
-                      <Link href="/call">
+                      <Link href={`/call?callee=${encodeURIComponent(activeUserId.trim())}`}>
                         <Phone className="mr-1.5 h-4 w-4" />
                         Voice
                       </Link>
                     </Button>
                     <Button asChild size="sm" variant="secondary">
-                      <Link href="/video-call">
+                      <Link href={`/video-call?callee=${encodeURIComponent(activeUserId.trim())}`}>
                         <Video className="mr-1.5 h-4 w-4" />
                         Video
                       </Link>
