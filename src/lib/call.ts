@@ -54,11 +54,17 @@ function logPermissionHint(op: string, path: string) {
   );
 }
 
+function getErrorField(e: unknown, key: "code" | "message") {
+  if (!e || typeof e !== "object") return undefined;
+  const value = (e as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
+}
+
 function isPermissionDeniedError(e: unknown) {
-  const code = (e as any)?.code;
-  const message = String((e as any)?.message || '').toLowerCase();
+  const code = getErrorField(e, "code");
+  const message = String(getErrorField(e, "message") || "").toLowerCase();
   // Firebase commonly uses codes like: "permission-denied" / "PERMISSION_DENIED"
-  return code === 'permission-denied' || code === 'PERMISSION_DENIED' || message.includes('permission denied');
+  return code === "permission-denied" || code === "PERMISSION_DENIED" || message.includes("permission denied");
 }
 
 async function clearPeerSignalState(userId: string, peerUserId: string) {

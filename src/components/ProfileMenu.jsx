@@ -7,7 +7,7 @@ import { Camera, KeyRound, Pencil, Trash2, X } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { setUserProfilePhoto } from '@/services/firebaseChat';
+import { clearUserProfilePhoto, setUserProfilePhoto } from '@/services/firebaseChat';
 
 /**
  * Portals to document.body so modals are not clipped by app-shell overflow-hidden.
@@ -74,6 +74,7 @@ export function ProfileMenu() {
   const [pwdConfirm, setPwdConfirm] = useState('');
   const [pwdMsg, setPwdMsg] = useState('');
   const [editMsg, setEditMsg] = useState('');
+  const [photoMsg, setPhotoMsg] = useState('');
 
   useEffect(() => {
     // FIX: Never use a shared/global localStorage avatar key (it causes photo mix-ups between users).
@@ -189,9 +190,17 @@ export function ProfileMenu() {
   };
 
   const handleDeletePhoto = () => {
-    setAvatarUrl(null);
-    // FIX: Do not touch shared local storage; photoURL lives in Firebase.
-    setPhotoOpen(false);
+    if (!user?.uid) return;
+    (async () => {
+      try {
+        await clearUserProfilePhoto({ userId: user.uid, photoURL: avatarUrl });
+        setAvatarUrl(null);
+        setPhotoMsg('');
+        setPhotoOpen(false);
+      } catch {
+        setPhotoMsg('Could not delete photo right now. Please try again.');
+      }
+    })();
   };
 
   return (
@@ -259,6 +268,7 @@ export function ProfileMenu() {
               onClick={() => {
                 setMenuOpen(false);
                 setPhotoOpen(true);
+                setPhotoMsg('');
               }}
             >
               <Camera className="h-4 w-4 shrink-0 opacity-80" />
@@ -317,6 +327,11 @@ export function ProfileMenu() {
                   <Trash2 className="h-4 w-4 shrink-0 opacity-80" />
                   Delete the photo
                 </Button>
+              )}
+              {photoMsg && (
+                <p className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-800 dark:text-red-200">
+                  {photoMsg}
+                </p>
               )}
             </div>
           </div>

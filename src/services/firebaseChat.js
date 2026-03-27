@@ -16,7 +16,7 @@ import {
   set,
   update
 } from 'firebase/database';
-import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
+import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import { getFirebaseStorage, getRealtimeDb } from './firebaseClient';
 import { subscribeToAuthState } from './firebaseAuth';
 
@@ -232,6 +232,37 @@ export async function setUserProfilePhoto({ userId, file }) {
   });
 
   return photoURL;
+}
+
+/**
+ * Remove persisted user profile photo.
+ * Best-effort deletes storage object when URL points to this project's bucket.
+ */
+export async function clearUserProfilePhoto({ userId, photoURL }) {
+  if (!userId) throw new Error('User ID is required.');
+  const realtimeDb = getRealtimeDb();
+  const storage = getFirebaseStorage();
+
+  if (photoURL && typeof photoURL === 'string') {
+    try {
+      const marker = '/o/';
+      const markerIndex = photoURL.indexOf(marker);
+      if (markerIndex >= 0) {
+        const encodedPath = photoURL.slice(markerIndex + marker.length).split('?')[0] || '';
+        const decodedPath = decodeURIComponent(encodedPath);
+        if (decodedPath.startsWith(`userPhotos/${userId}/`)) {
+          await deleteObject(storageRef(storage, decodedPath));
+        }
+      }
+    } catch {
+      // Best-effort cleanup; DB state should still be updated.
+    }
+  }
+
+  await update(ref(realtimeDb, `users/${userId}`), {
+    photoURL: null,
+    photoUpdatedAt: Date.now(),
+  });
 }
 
 /**
