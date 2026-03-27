@@ -18,9 +18,116 @@ import {
 } from 'firebase/database';
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import { getFirebaseStorage, getRealtimeDb } from './firebaseClient';
+import { subscribeToAuthState } from './firebaseAuth';
 
 function directThreadId(userA, userB) {
   return [userA, userB].sort().join('__');
+}
+
+function createDirectChatIndexEntry({ ownerId, peerId, lastMessage, lastSenderId, updatedAt, unreadCount }) {
+  return {
+    peerId,
+    lastMessage: lastMessage || '',
+    lastSenderId: lastSenderId || '',
+    updatedAt: Number(updatedAt || 0),
+    unreadCount: Number(unreadCount || 0),
+    ...(ownerId && peerId
+      ? {
+          participants: {
+            [ownerId]: true,
+            [peerId]: true
+          }
+        }
+      : {})
+  };
+}
+
+function normalizeRecentDirectItem({ threadId, value, activeUserId, usersById }) {
+  const itemValue = value || {};
+  const peerId = itemValue.peerId || itemValue.otherUserId || itemValue.participantId || '';
+  const participants = itemValue.participants || {};
+  if (!peerId) return null;
+  if (activeUserId && Object.keys(participants).length > 0 && !participants[activeUserId]) {
+    return null;
+  }
+  const updatedAt = Number(itemValue.updatedAt || itemValue.lastMessageAt || itemValue.lastUpdatedAt || 0);
+  return {
+    threadId,
+    peerId,
+    peerUsername: usersById[peerId] || 'User',
+    lastMessage: itemValue.lastMessage || itemValue.preview || '',
+    lastSenderId: itemValue.lastSenderId || '',
+    lastMessageAt: updatedAt,
+    unreadCount: Number(itemValue.unreadCount || 0),
+    archived: Boolean(itemValue.archived),
+    locked: Boolean(itemValue.locked)
+  };
+}
+
+function createRecentDirectChatsSubscription({ userId, callback, limit = 30 }) {
+  const realtimeDb = getRealtimeDb();
+  const userChatsRef = query(ref(realtimeDb, `userChats/${userId}`), orderByChild('updatedAt'), limitToLast(limit));
+  const recentRef = query(
+    ref(realtimeDb, `recentDirectChats/${userId}`),
+    orderByChild('updatedAt'),
+    limitToLast(limit)
+  );
+
+  let userChatsMap = {};
+  let recentChatsMap = {};
+  let usersById = null;
+
+  const loadUsersById = async () => {
+    if (usersById) return usersById;
+    const usersSnap = await get(ref(realtimeDb, 'users'));
+    const nextUsersById = {};
+    if (usersSnap.exists()) {
+      Object.values(usersSnap.val()).forEach((item) => {
+        if (item?.uid) {
+          nextUsersById[item.uid] = item.username || item.email?.split('@')[0] || 'User';
+        }
+      });
+    }
+    usersById = nextUsersById;
+    return usersById;
+  };
+
+  const emit = async () => {
+    try {
+      const usernamesById = await loadUsersById();
+      const merged = {
+        ...(recentChatsMap || {}),
+        ...(userChatsMap || {})
+      };
+      const items = Object.entries(merged)
+        .map(([threadId, value]) =>
+          normalizeRecentDirectItem({ threadId, value, activeUserId: userId, usersById: usernamesById })
+        )
+        .filter(Boolean)
+        .sort((a, b) => b.lastMessageAt - a.lastMessageAt)
+        .slice(0, limit);
+      callback(items);
+    } catch {
+      callback([]);
+    }
+  };
+
+  const userChatsListener = (snap) => {
+    userChatsMap = snap.exists() ? snap.val() || {} : {};
+    emit();
+  };
+  const recentChatsListener = (snap) => {
+    recentChatsMap = snap.exists() ? snap.val() || {} : {};
+    emit();
+  };
+
+  onValue(userChatsRef, userChatsListener);
+  onValue(recentRef, recentChatsListener);
+
+  return () => {
+    off(userChatsRef, 'value', userChatsListener);
+    off(recentRef, 'value', recentChatsListener);
+  };
 }
 
 function getGroupMemberRole(membershipValue) {
@@ -436,84 +543,60 @@ export async function setMyPresence(userId, online) {
 }
 
 export function subscribeRecentDirectChats(userId, callback, limit = 30) {
-  const realtimeDb = getRealtimeDb();
-  if (!userId) {
-    callback([]);
-    return () => undefined;
+  if (userId) {
+    return createRecentDirectChatsSubscription({ userId, callback, limit });
   }
 
-  const recentRef = query(
-    ref(realtimeDb, `recentDirectChats/${userId}`),
-    orderByChild('updatedAt'),
-    limitToLast(limit)
-  );
-
-  const listener = async (snap) => {
-    if (!snap.exists()) {
+  let stopInner = () => undefined;
+  const stopAuth = subscribeToAuthState(async (authUser) => {
+    stopInner();
+    if (!authUser?.uid) {
       callback([]);
       return;
     }
+    stopInner = createRecentDirectChatsSubscription({ userId: authUser.uid, callback, limit });
+  });
 
-    const usersSnap = await get(ref(realtimeDb, 'users'));
-    const usersById = {};
-    if (usersSnap.exists()) {
-      Object.values(usersSnap.val()).forEach((item) => {
-        if (item?.uid) {
-          usersById[item.uid] = item.username || item.email?.split('@')[0] || 'User';
-        }
-      });
-    }
-
-    const items = Object.entries(snap.val())
-      .map(([threadId, value]) => ({
-        threadId,
-        peerId: value.peerId,
-        peerUsername: usersById[value.peerId] || 'User',
-        lastMessage: value.lastMessage || '',
-        lastSenderId: value.lastSenderId || '',
-        lastMessageAt: value.updatedAt || 0,
-        unreadCount: Number(value.unreadCount || 0),
-        archived: Boolean(value.archived),
-        locked: Boolean(value.locked)
-      }))
-      .filter((item) => item.peerId)
-      .sort((a, b) => b.lastMessageAt - a.lastMessageAt);
-
-    callback(items);
+  return () => {
+    stopInner();
+    stopAuth();
   };
-
-  onValue(recentRef, listener);
-  return () => off(recentRef, 'value', listener);
 }
 
 export async function markRecentDirectChatRead(userId, peerId) {
   if (!userId || !peerId) return;
   const realtimeDb = getRealtimeDb();
   const threadId = directThreadId(userId, peerId);
-  await update(ref(realtimeDb, `recentDirectChats/${userId}/${threadId}`), {
-    unreadCount: 0
+  await update(ref(realtimeDb), {
+    [`recentDirectChats/${userId}/${threadId}/unreadCount`]: 0,
+    [`userChats/${userId}/${threadId}/unreadCount`]: 0
   }).catch(() => undefined);
 }
 
 export async function deleteRecentDirectChat({ userId, threadId }) {
   if (!userId || !threadId) return;
   const realtimeDb = getRealtimeDb();
-  await remove(ref(realtimeDb, `recentDirectChats/${userId}/${threadId}`));
+  await update(ref(realtimeDb), {
+    [`recentDirectChats/${userId}/${threadId}`]: null,
+    [`userChats/${userId}/${threadId}`]: null
+  });
 }
 
 export async function setRecentDirectChatArchived({ userId, threadId, archived }) {
   if (!userId || !threadId) return;
   const realtimeDb = getRealtimeDb();
-  await update(ref(realtimeDb, `recentDirectChats/${userId}/${threadId}`), {
-    archived: Boolean(archived)
+  await update(ref(realtimeDb), {
+    [`recentDirectChats/${userId}/${threadId}/archived`]: Boolean(archived),
+    [`userChats/${userId}/${threadId}/archived`]: Boolean(archived)
   });
 }
 
 export async function setRecentDirectChatLocked({ userId, threadId, locked }) {
   if (!userId || !threadId) return;
   const realtimeDb = getRealtimeDb();
-  await update(ref(realtimeDb, `recentDirectChats/${userId}/${threadId}`), {
-    locked: Boolean(locked)
+  await update(ref(realtimeDb), {
+    [`recentDirectChats/${userId}/${threadId}/locked`]: Boolean(locked),
+    [`userChats/${userId}/${threadId}/locked`]: Boolean(locked)
   });
 }
 
@@ -574,14 +657,33 @@ async function syncRecentDirectChats({ realtimeDb, userId, peerId, threadId }) {
         : latestValue?.content || '';
   const updatedAt = latestValue?.updatedAt || latestValue?.createdAt || Date.now();
   const lastSenderId = latestValue?.senderId || userId;
+  const participantA = userId;
+  const participantB = peerId;
 
   await update(ref(realtimeDb), {
     [`recentDirectChats/${userId}/${threadId}/lastMessage`]: preview,
     [`recentDirectChats/${userId}/${threadId}/lastSenderId`]: lastSenderId,
     [`recentDirectChats/${userId}/${threadId}/updatedAt`]: updatedAt,
+    [`recentDirectChats/${userId}/${threadId}/participants/${participantA}`]: true,
+    [`recentDirectChats/${userId}/${threadId}/participants/${participantB}`]: true,
     [`recentDirectChats/${peerId}/${threadId}/lastMessage`]: preview,
     [`recentDirectChats/${peerId}/${threadId}/lastSenderId`]: lastSenderId,
-    [`recentDirectChats/${peerId}/${threadId}/updatedAt`]: updatedAt
+    [`recentDirectChats/${peerId}/${threadId}/updatedAt`]: updatedAt,
+    [`recentDirectChats/${peerId}/${threadId}/participants/${participantA}`]: true,
+    [`recentDirectChats/${peerId}/${threadId}/participants/${participantB}`]: true,
+    [`userChats/${userId}/${threadId}/lastMessage`]: preview,
+    [`userChats/${userId}/${threadId}/lastSenderId`]: lastSenderId,
+    [`userChats/${userId}/${threadId}/updatedAt`]: updatedAt,
+    [`userChats/${userId}/${threadId}/participants/${participantA}`]: true,
+    [`userChats/${userId}/${threadId}/participants/${participantB}`]: true,
+    [`userChats/${peerId}/${threadId}/lastMessage`]: preview,
+    [`userChats/${peerId}/${threadId}/lastSenderId`]: lastSenderId,
+    [`userChats/${peerId}/${threadId}/updatedAt`]: updatedAt,
+    [`userChats/${peerId}/${threadId}/participants/${participantA}`]: true,
+    [`userChats/${peerId}/${threadId}/participants/${participantB}`]: true,
+    [`directThreads/${threadId}/participants/${participantA}`]: true,
+    [`directThreads/${threadId}/participants/${participantB}`]: true,
+    [`directThreads/${threadId}/updatedAt`]: updatedAt
   });
 }
 
@@ -611,27 +713,40 @@ export async function sendDirectMessage({ senderId, receiverId, content }) {
   });
 
   try {
+    const senderIndex = createDirectChatIndexEntry({
+      ownerId: senderId,
+      peerId: receiverId,
+      lastMessage: content,
+      lastSenderId: senderId,
+      updatedAt: now,
+      unreadCount: 0
+    });
+    const receiverIndex = createDirectChatIndexEntry({
+      ownerId: receiverId,
+      peerId: senderId,
+      lastMessage: content,
+      lastSenderId: senderId,
+      updatedAt: now,
+      unreadCount: 0
+    });
+
     await update(ref(realtimeDb), {
-      [`recentDirectChats/${senderId}/${threadId}`]: {
-        peerId: receiverId,
-        lastMessage: content,
-        lastSenderId: senderId,
-        updatedAt: now,
-        unreadCount: 0
-      },
-      [`recentDirectChats/${receiverId}/${threadId}`]: {
-        peerId: senderId,
-        lastMessage: content,
-        lastSenderId: senderId,
-        updatedAt: now
-      }
+      [`recentDirectChats/${senderId}/${threadId}`]: senderIndex,
+      [`recentDirectChats/${receiverId}/${threadId}`]: receiverIndex,
+      [`userChats/${senderId}/${threadId}`]: senderIndex,
+      [`userChats/${receiverId}/${threadId}`]: receiverIndex,
+      [`directThreads/${threadId}/participants/${senderId}`]: true,
+      [`directThreads/${threadId}/participants/${receiverId}`]: true,
+      [`directThreads/${threadId}/updatedAt`]: now
     });
 
     const unreadRef = ref(realtimeDb, `recentDirectChats/${receiverId}/${threadId}/unreadCount`);
-    await runTransaction(unreadRef, (current) => {
+    const unreadUserChatsRef = ref(realtimeDb, `userChats/${receiverId}/${threadId}/unreadCount`);
+    const incrementUnread = (current) => {
       const safe = Number(current || 0);
       return safe + 1;
-    });
+    };
+    await Promise.all([runTransaction(unreadRef, incrementUnread), runTransaction(unreadUserChatsRef, incrementUnread)]);
   } catch {
     /* ignore recent index failures to avoid blocking messages */
   }
@@ -677,29 +792,42 @@ export async function sendDirectMedia({ senderId, receiverId, file }) {
   });
 
   try {
+    const messagePreview =
+      mediaType === 'image' ? 'Photo' : mediaType === 'video' ? 'Video' : `File${file.name ? `: ${file.name}` : ''}`;
+    const senderIndex = createDirectChatIndexEntry({
+      ownerId: senderId,
+      peerId: receiverId,
+      lastMessage: messagePreview,
+      lastSenderId: senderId,
+      updatedAt: now,
+      unreadCount: 0
+    });
+    const receiverIndex = createDirectChatIndexEntry({
+      ownerId: receiverId,
+      peerId: senderId,
+      lastMessage: messagePreview,
+      lastSenderId: senderId,
+      updatedAt: now,
+      unreadCount: 0
+    });
+
     await update(ref(realtimeDb), {
-      [`recentDirectChats/${senderId}/${threadId}`]: {
-        peerId: receiverId,
-        lastMessage:
-          mediaType === 'image' ? 'Photo' : mediaType === 'video' ? 'Video' : `File${file.name ? `: ${file.name}` : ''}`,
-        lastSenderId: senderId,
-        updatedAt: now,
-        unreadCount: 0
-      },
-      [`recentDirectChats/${receiverId}/${threadId}`]: {
-        peerId: senderId,
-        lastMessage:
-          mediaType === 'image' ? 'Photo' : mediaType === 'video' ? 'Video' : `File${file.name ? `: ${file.name}` : ''}`,
-        lastSenderId: senderId,
-        updatedAt: now
-      }
+      [`recentDirectChats/${senderId}/${threadId}`]: senderIndex,
+      [`recentDirectChats/${receiverId}/${threadId}`]: receiverIndex,
+      [`userChats/${senderId}/${threadId}`]: senderIndex,
+      [`userChats/${receiverId}/${threadId}`]: receiverIndex,
+      [`directThreads/${threadId}/participants/${senderId}`]: true,
+      [`directThreads/${threadId}/participants/${receiverId}`]: true,
+      [`directThreads/${threadId}/updatedAt`]: now
     });
 
     const unreadRef = ref(realtimeDb, `recentDirectChats/${receiverId}/${threadId}/unreadCount`);
-    await runTransaction(unreadRef, (current) => {
+    const unreadUserChatsRef = ref(realtimeDb, `userChats/${receiverId}/${threadId}/unreadCount`);
+    const incrementUnread = (current) => {
       const safe = Number(current || 0);
       return safe + 1;
-    });
+    };
+    await Promise.all([runTransaction(unreadRef, incrementUnread), runTransaction(unreadUserChatsRef, incrementUnread)]);
   } catch {
     /* ignore recent index failures to avoid blocking messages */
   }

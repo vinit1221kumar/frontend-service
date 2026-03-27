@@ -182,18 +182,12 @@ export default function ChatDashboardPage() {
   }, [activeUserId]);
 
   useEffect(() => {
-    if (!user?.id) {
-      setRecentChats([]);
-      setRecentLoadError('');
-      return;
-    }
-
     setRecentLoading(true);
     setRecentLoadError('');
     let unsubscribe = () => undefined;
 
     try {
-      unsubscribe = subscribeRecentDirectChats(user.id, (items) => {
+      unsubscribe = subscribeRecentDirectChats(user?.id, (items) => {
         setRecentChats(items);
         setRecentLoadError('');
         setRecentLoading(false);
