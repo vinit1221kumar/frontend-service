@@ -328,7 +328,9 @@ export async function searchUsersByUsername(term, excludeUserId) {
   const users = usersSnap.val();
   return Object.values(users)
     .filter((user) => user?.uid && user.uid !== excludeUserId)
-    .filter((user) => (user.username || '').toLowerCase().includes(value))
+    // Prefix search: only match usernames starting with the typed query.
+    // (Client-side fallback; keeps behaviour stable even if DB indexing differs.)
+    .filter((user) => (user.username || '').toLowerCase().startsWith(value))
     .slice(0, 20)
     .map((user) => ({
       id: user.uid,
