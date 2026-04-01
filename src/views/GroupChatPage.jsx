@@ -16,10 +16,16 @@ import {
   sendGroupMessage as sendFirebaseGroupMessage,
   setGroupMemberRole,
   setGroupMuted,
-  subscribeGroupMessages
+  subscribeGroupMessages,
+  toggleGroupReaction,
+  setGroupTyping,
+  subscribeGroupTyping,
+  pinGroupMessage,
+  unpinGroupMessage,
+  subscribePinnedGroupMessages
 } from '../services/firebaseChat';
 import { motion } from 'framer-motion';
-import { BellOff, Camera, LogOut, MessageSquare, MoreVertical, Search, Send, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { BellOff, Camera, LogOut, MessageSquare, MoreVertical, Pin, PinOff, Search, Send, SmilePlus, Trash2, UserPlus, Users, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AppMainHeader } from '@/components/AppMainHeader';
 import { cn } from '@/lib/utils';
@@ -57,6 +63,13 @@ export default function GroupChatPage() {
   const [groupPhotoUrl, setGroupPhotoUrl] = useState('');
   const groupSearchWrapRef = useRef(null);
   const groupMenuRef = useRef(null);
+  const EMOJI_OPTIONS = ['👍', '❤️', '😂', '😮', '😢', '👏'];
+  const [groupMsgSearch, setGroupMsgSearch] = useState('');
+  const [groupMsgSearchOpen, setGroupMsgSearchOpen] = useState(false);
+  const [groupTypingUsers, setGroupTypingUsers] = useState([]);
+  const [groupPinnedMessages, setGroupPinnedMessages] = useState([]);
+  const [openGroupReactionPickerId, setOpenGroupReactionPickerId] = useState(null);
+  const groupTypingTimeoutRef = useRef(null);
   const groupPhotoInputRef = useRef(null);
   const messagesWrapRef = useRef(null);
   const shouldAutoScrollRef = useRef(true);
@@ -128,7 +141,11 @@ export default function GroupChatPage() {
         history.forEach((item) => seen.add(item._id));
         setMessages(history);
         setMessagesLoading(false);
-        unsubscribe = subscribeGroupMessages(groupId.trim(), (msg) => {
+        unsubscribe = subscribeGroupMessages(groupId.trim(), (msg, changeType) => {
+          if (changeType === 'changed') {
+            setMessages((prev) => prev.map((item) => (item._id === msg._id ? { ...item, ...msg } : item)));
+            return;
+          }
           if (seen.has(msg._id)) return;
           seen.add(msg._id);
           setMessages((prev) => [...prev, msg]);
@@ -158,6 +175,35 @@ export default function GroupChatPage() {
     // FIX: Scroll to latest message on send/receive when user is near bottom.
     el.scrollTop = el.scrollHeight;
   }, [messages.length]);
+
+  // Group typing subscription
+  useEffect(() => {
+    if (!groupId.trim() || !user?.id) {
+      setGroupTypingUsers([]);
+      return;
+    }
+    const unsub = subscribeGroupTyping(groupId.trim(), user.id, setGroupTypingUsers);
+    return unsub;
+  }, [groupId, user?.id]);
+
+  // Group pinned messages subscription
+  useEffect(() => {
+    if (!groupId.trim()) {
+      setGroupPinnedMessages([]);
+      return;
+    }
+    const unsub = subscribePinnedGroupMessages(groupId.trim(), setGroupPinnedMessages);
+    return unsub;
+  }, [groupId]);
+
+  // Close reaction picker on outside click
+  useEffect(() => {
+    const onDoc = (e) => {
+      if (!e.target?.closest?.('[data-group-reaction-picker]')) setOpenGroupReactionPickerId(null);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
 
   const loadGroupMembers = useCallback(async (id) => {
     const normalized = String(id || '').trim();
@@ -271,6 +317,9 @@ export default function GroupChatPage() {
     setSending(true);
     setPanelError('');
     setPanelSuccess('');
+    // Clear typing on send
+    setGroupTyping({ groupId: groupId.trim(), userId: user.id, username: user.username || 'User', isTyping: false }).catch(() => undefined);
+    if (groupTypingTimeoutRef.current) clearTimeout(groupTypingTimeoutRef.current);
     try {
       await sendFirebaseGroupMessage({
         groupId: groupId.trim(),
@@ -283,6 +332,38 @@ export default function GroupChatPage() {
     } finally {
       setSending(false);
     }
+  };
+
+  const handleGroupMessageInput = (e) => {
+    setMessage(e.target.value);
+    if (!user?.id || !groupId.trim()) return;
+    setGroupTyping({ groupId: groupId.trim(), userId: user.id, username: user.username || 'User', isTyping: true }).catch(() => undefined);
+    if (groupTypingTimeoutRef.current) clearTimeout(groupTypingTimeoutRef.current);
+    groupTypingTimeoutRef.current = setTimeout(() => {
+      setGroupTyping({ groupId: groupId.trim(), userId: user.id, username: user.username || 'User', isTyping: false }).catch(() => undefined);
+    }, 3000);
+  };
+
+  const handleToggleGroupReaction = async (messageId, emoji) => {
+    if (!user?.id || !groupId.trim() || !messageId) return;
+    setOpenGroupReactionPickerId(null);
+    try {
+      await toggleGroupReaction({ groupId: groupId.trim(), userId: user.id, messageId, emoji });
+    } catch { /* ignore */ }
+  };
+
+  const handlePinGroupMessage = async (msg) => {
+    if (!user?.id || !groupId.trim()) return;
+    try {
+      await pinGroupMessage({ groupId: groupId.trim(), userId: user.id, messageId: msg._id, content: msg.message || '' });
+    } catch { setPanelError('Could not pin message.'); }
+  };
+
+  const handleUnpinGroupMessage = async (messageId) => {
+    if (!groupId.trim()) return;
+    try {
+      await unpinGroupMessage({ groupId: groupId.trim(), messageId });
+    } catch { setPanelError('Could not unpin message.'); }
   };
 
   const handleDeleteGroupMessage = async (messageId) => {
@@ -628,6 +709,17 @@ export default function GroupChatPage() {
                   </div>
                 </div>
               </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  size="icon"
+                  variant={groupMsgSearchOpen ? 'default' : 'ghost'}
+                  className="h-8 w-8"
+                  onClick={() => setGroupMsgSearchOpen((o) => !o)}
+                  aria-label="Search messages"
+                >
+                  <Search className="h-4 w-4" />
+                </Button>
               <div ref={groupMenuRef} className="relative">
                 <Button
                   type="button"
@@ -674,8 +766,50 @@ export default function GroupChatPage() {
                   </div>
                 )}
               </div>
+              </div>
             </div>
           </div>
+
+          {/* Group message search bar */}
+          {groupMsgSearchOpen && groupId.trim() && (
+            <div className="shrink-0 border-b border-amber-200/60 bg-amber-50/60 px-4 py-2 dark:border-navy-700/40 dark:bg-navy-950/50">
+              <input
+                autoFocus
+                className="input py-1.5 text-sm"
+                placeholder="Search messages…"
+                value={groupMsgSearch}
+                onChange={(e) => setGroupMsgSearch(e.target.value)}
+              />
+            </div>
+          )}
+
+          {/* Group pinned messages banner */}
+          {groupPinnedMessages.length > 0 && groupId.trim() && (
+            <div className="shrink-0 border-b border-amber-200/60 bg-amber-50/80 dark:border-navy-700/40 dark:bg-navy-950/60">
+              {groupPinnedMessages.slice(0, 1).map((pin) => (
+                <div key={pin.messageId} className="flex items-center gap-2 px-4 py-2">
+                  <Pin className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-sky-400" />
+                  <p className="min-w-0 flex-1 truncate text-xs font-medium text-amber-900 dark:text-slate-100">
+                    {pin.content || 'Pinned message'}
+                  </p>
+                  {isGroupAdmin && (
+                    <button
+                      type="button"
+                      className="shrink-0 text-xs text-amber-600 hover:underline dark:text-sky-400"
+                      onClick={() => handleUnpinGroupMessage(pin.messageId)}
+                    >
+                      Unpin
+                    </button>
+                  )}
+                </div>
+              ))}
+              {groupPinnedMessages.length > 1 && (
+                <p className="px-4 pb-1 text-[10px] text-amber-700/70 dark:text-slate-400/70">
+                  +{groupPinnedMessages.length - 1} more pinned
+                </p>
+              )}
+            </div>
+          )}
 
           <div
             ref={messagesWrapRef}
@@ -702,11 +836,17 @@ export default function GroupChatPage() {
               </div>
             )}
 
-            {messages.map((m, idx) => {
+            {messages
+              .filter((m) => !groupMsgSearch.trim() || (m.message || '').toLowerCase().includes(groupMsgSearch.trim().toLowerCase()))
+              .map((m, idx) => {
               const senderName =
                 m.senderId === user?.id ? user?.username || 'You' : senderNamesById[m.senderId] || 'Group member';
               const mine = m.senderId === user?.id;
-              const myId = user?.id;
+              const isPinned = groupPinnedMessages.some((p) => p.messageId === m._id);
+              const reactionEntries = Object.entries(m.reactions || {});
+              // Read count for sent messages
+              const readCount = mine ? Object.keys(m.readBy || {}).filter((uid) => uid !== user?.id).length : 0;
+              const memberCount = groupMembers.length;
 
               return (
                 <motion.div
@@ -714,54 +854,104 @@ export default function GroupChatPage() {
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2 }}
-                  className={cn('flex w-full', mine ? 'justify-end' : 'justify-start')}
+                  className={cn('group flex w-full flex-col', mine ? 'items-end' : 'items-start')}
                 >
-                  <div
-                    className={cn(
-                      'w-full max-w-[85%] rounded-xl border px-3 py-2 text-sm sm:max-w-[72%]',
-                      mine
-                        ? 'border-amber-400/50 bg-gradient-to-br from-amber-500 to-amber-600 text-white'
-                        : 'border-slate-200 bg-slate-50 text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-100'
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                    <div className={cn('text-xs font-medium', mine ? 'text-amber-100/90' : 'text-slate-600 dark:text-slate-300')}>
-                      {senderName}
-                      {!mine && myId && (
-                        <div
-                          className={cn(
-                            'mt-0.5 text-[10px] font-semibold tracking-wide',
-                            m.readBy?.[myId]
-                              ? 'text-emerald-900'
-                              : m.deliveredBy?.[myId]
-                                ? 'text-sky-900'
-                                : 'text-slate-500'
+                  <div className="relative flex items-end gap-1">
+                    {/* Reaction trigger */}
+                    <button
+                      type="button"
+                      data-group-reaction-picker
+                      className={cn(
+                        'mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-amber-200/80 bg-white text-base opacity-0 shadow transition group-hover:opacity-100 dark:border-navy-700/60 dark:bg-navy-950',
+                        mine ? 'order-first' : 'order-last'
+                      )}
+                      onClick={() => setOpenGroupReactionPickerId((prev) => (prev === m._id ? null : m._id))}
+                      title="React"
+                    >
+                      <SmilePlus className="h-3.5 w-3.5 text-amber-600 dark:text-sky-400" />
+                    </button>
+
+                    <div
+                      className={cn(
+                        'w-full max-w-[85%] rounded-xl border px-3 py-2 text-sm sm:max-w-[72%]',
+                        mine
+                          ? 'border-amber-400/50 bg-gradient-to-br from-amber-500 to-amber-600 text-white'
+                          : 'border-slate-200 bg-slate-50 text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-100'
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className={cn('text-xs font-medium', mine ? 'text-amber-100/90' : 'text-slate-600 dark:text-slate-300')}>
+                          {senderName}
+                          {isPinned && <Pin className="ml-1 inline h-2.5 w-2.5 opacity-70" />}
+                          {mine && memberCount > 1 && (
+                            <div className="mt-0.5 text-[10px] font-semibold tracking-wide text-amber-100/80">
+                              {readCount > 0 ? `Read by ${readCount}/${memberCount - 1}` : 'Sent'}
+                            </div>
                           )}
-                        >
-                          {m.readBy?.[myId] ? 'Read' : m.deliveredBy?.[myId] ? 'Delivered' : 'Sent'}
                         </div>
-                      )}
-                    </div>
-                      {mine && (
-                        <button
-                          type="button"
-                          className={cn(
-                            'rounded-md p-1 transition',
-                            mine
-                              ? 'text-amber-100 hover:bg-white/15 hover:text-white'
-                              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-slate-100'
+                        <div className="flex items-center gap-1">
+                          {(mine || isGroupAdmin) && (
+                            <button
+                              type="button"
+                              className={cn('rounded-md p-1 transition', mine ? 'text-amber-100 hover:bg-white/15' : 'text-slate-500 hover:bg-slate-200 dark:text-slate-300 dark:hover:bg-white/10')}
+                              onClick={() => isPinned ? handleUnpinGroupMessage(m._id) : handlePinGroupMessage(m)}
+                              title={isPinned ? 'Unpin' : 'Pin'}
+                            >
+                              {isPinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+                            </button>
                           )}
-                          onClick={() => handleDeleteGroupMessage(m._id)}
-                          disabled={deletingMessageId === m._id}
-                          aria-label="Delete message"
-                          title="Delete message"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      )}
+                          {mine && (
+                            <button
+                              type="button"
+                              className={cn('rounded-md p-1 transition', mine ? 'text-amber-100 hover:bg-white/15 hover:text-white' : 'text-slate-500 hover:bg-slate-200 dark:text-slate-300 dark:hover:bg-white/10')}
+                              onClick={() => handleDeleteGroupMessage(m._id)}
+                              disabled={deletingMessageId === m._id}
+                              aria-label="Delete message"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className={cn('mt-1', mine ? 'text-white' : 'text-slate-900 dark:text-slate-100')}>{m.message}</div>
                     </div>
-                    <div className={cn('mt-1', mine ? 'text-white' : 'text-slate-900 dark:text-slate-100')}>{m.message}</div>
                   </div>
+
+                  {/* Emoji reaction picker */}
+                  {openGroupReactionPickerId === m._id && (
+                    <div
+                      data-group-reaction-picker
+                      className={cn('mt-1 flex gap-1 rounded-full border border-amber-200/80 bg-white px-2 py-1 shadow-md dark:border-navy-700/60 dark:bg-navy-950', mine ? 'mr-8' : 'ml-8')}
+                    >
+                      {EMOJI_OPTIONS.map((emoji) => (
+                        <button key={emoji} type="button" className="rounded-full px-1 py-0.5 text-base transition hover:scale-125" onClick={() => handleToggleGroupReaction(m._id, emoji)}>
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Reactions display */}
+                  {reactionEntries.length > 0 && (
+                    <div className={cn('mt-1 flex flex-wrap gap-1', mine ? 'mr-8 justify-end' : 'ml-8')}>
+                      {reactionEntries.map(([emoji, users]) => {
+                        const count = Object.keys(users || {}).length;
+                        if (!count) return null;
+                        const reacted = !!(users || {})[user?.id];
+                        return (
+                          <button
+                            key={emoji}
+                            type="button"
+                            className={cn('flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition', reacted ? 'border-amber-400 bg-amber-100 dark:border-sky-500 dark:bg-navy-800' : 'border-amber-200/80 bg-white dark:border-navy-700 dark:bg-navy-900')}
+                            onClick={() => handleToggleGroupReaction(m._id, emoji)}
+                          >
+                            <span>{emoji}</span>
+                            <span className={reacted ? 'text-amber-700 dark:text-sky-400' : 'text-amber-800 dark:text-slate-300'}>{count}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </motion.div>
               );
             })}
@@ -772,6 +962,15 @@ export default function GroupChatPage() {
             )}
           </div>
 
+          {/* Typing indicator */}
+          {groupTypingUsers.length > 0 && (
+            <div className="shrink-0 px-4 py-1 text-xs text-amber-700/80 dark:text-slate-400">
+              <span className="animate-pulse">
+                {groupTypingUsers.join(', ')} {groupTypingUsers.length === 1 ? 'is' : 'are'} typing…
+              </span>
+            </div>
+          )}
+
           <form
             className="flex shrink-0 gap-2 border-t border-amber-200/60 bg-white/80 p-3 dark:border-navy-700/40 dark:bg-navy-950/70"
             onSubmit={handleSendGroupMessage}
@@ -779,7 +978,7 @@ export default function GroupChatPage() {
             <input
               className="input"
               value={message}
-              onChange={(e) => setMessage(e.target.value)}
+              onChange={handleGroupMessageInput}
               placeholder={groupId.trim() ? 'Type a message…' : 'Open a group first…'}
             />
             <Button className="whitespace-nowrap" type="submit" disabled={!groupId || !message || !isMember || sending}>

@@ -188,7 +188,8 @@ function mapDmMessage(id, value) {
     // FIX: delivered receipts (backward compatible)
     deliveredBy: value.deliveredBy || {},
     // FIX: read receipts (backward compatible: absent => unread for that user)
-    readBy: value.readBy || {}
+    readBy: value.readBy || {},
+    reactions: value.reactions || {}
   };
 }
 
@@ -203,7 +204,8 @@ function mapGroupMessage(id, value) {
     // FIX: delivered receipts (backward compatible)
     deliveredBy: value.deliveredBy || {},
     // FIX: group read receipts (backward compatible)
-    readBy: value.readBy || {}
+    readBy: value.readBy || {},
+    reactions: value.reactions || {}
   };
 }
 
@@ -794,7 +796,8 @@ export async function sendDirectMedia({ senderId, receiverId, file }) {
 
   const isImage = file.type.startsWith('image/');
   const isVideo = file.type.startsWith('video/');
-  const mediaType = isImage ? 'image' : isVideo ? 'video' : 'file';
+  const isAudio = file.type.startsWith('audio/');
+  const mediaType = isImage ? 'image' : isVideo ? 'video' : isAudio ? 'audio' : 'file';
 
   const realtimeDb = getRealtimeDb();
   const storage = getFirebaseStorage();
@@ -986,12 +989,20 @@ export async function listGroupMessages(groupId) {
 export function subscribeGroupMessages(groupId, callback) {
   const realtimeDb = getRealtimeDb();
   const groupRef = query(ref(realtimeDb, `groupMessages/${groupId}`), limitToLast(150));
-  const listener = (snap) => {
+  const handleAdded = (snap) => {
     if (!snap.exists()) return;
-    callback(mapGroupMessage(snap.key, snap.val()));
+    callback(mapGroupMessage(snap.key, snap.val()), 'added');
   };
-  onChildAdded(groupRef, listener);
-  return () => off(groupRef, 'child_added', listener);
+  const handleChanged = (snap) => {
+    if (!snap.exists()) return;
+    callback(mapGroupMessage(snap.key, snap.val()), 'changed');
+  };
+  onChildAdded(groupRef, handleAdded);
+  onChildChanged(groupRef, handleChanged);
+  return () => {
+    off(groupRef, 'child_added', handleAdded);
+    off(groupRef, 'child_changed', handleChanged);
+  };
 }
 
 export async function sendGroupMessage({ groupId, senderId, message }) {
@@ -1267,4 +1278,176 @@ export async function endVoiceCallSession(callId) {
     status: 'ended',
     endedAt: Date.now()
   });
+}
+
+// ===== REACTIONS =====
+
+export async function toggleDmReaction({ userId, peerId, messageId, emoji }) {
+  if (!userId || !peerId || !messageId || !emoji) return;
+  const realtimeDb = getRealtimeDb();
+  const threadId = directThreadId(userId, peerId);
+  const reactionRef = ref(realtimeDb, `dmMessages/${threadId}/${messageId}/reactions/${emoji}/${userId}`);
+  const snap = await get(reactionRef);
+  if (snap.exists()) {
+    await remove(reactionRef);
+  } else {
+    await set(reactionRef, true);
+  }
+}
+
+export async function toggleGroupReaction({ groupId, userId, messageId, emoji }) {
+  if (!groupId || !userId || !messageId || !emoji) return;
+  const normalizedGroupId = String(groupId || '').trim();
+  const realtimeDb = getRealtimeDb();
+  const reactionRef = ref(realtimeDb, `groupMessages/${normalizedGroupId}/${messageId}/reactions/${emoji}/${userId}`);
+  const snap = await get(reactionRef);
+  if (snap.exists()) {
+    await remove(reactionRef);
+  } else {
+    await set(reactionRef, true);
+  }
+}
+
+// ===== TYPING INDICATORS =====
+
+export async function setDmTyping({ userId, peerId, username, isTyping }) {
+  if (!userId || !peerId) return;
+  const realtimeDb = getRealtimeDb();
+  const threadId = directThreadId(userId, peerId);
+  const typingRef = ref(realtimeDb, `dmTyping/${threadId}/${userId}`);
+  if (isTyping) {
+    await set(typingRef, { username: username || 'User', updatedAt: Date.now() });
+  } else {
+    await remove(typingRef);
+  }
+}
+
+export function subscribeDmTyping(userId, peerId, currentUserId, callback) {
+  if (!userId || !peerId) return () => undefined;
+  const realtimeDb = getRealtimeDb();
+  const threadId = directThreadId(userId, peerId);
+  const typingRef = ref(realtimeDb, `dmTyping/${threadId}`);
+  const listener = (snap) => {
+    if (!snap.exists()) {
+      callback([]);
+      return;
+    }
+    const val = snap.val() || {};
+    const typers = Object.entries(val)
+      .filter(([uid]) => uid !== currentUserId)
+      .filter(([, v]) => Date.now() - Number(v.updatedAt || 0) < 5000)
+      .map(([, v]) => v.username || 'User');
+    callback(typers);
+  };
+  onValue(typingRef, listener);
+  return () => off(typingRef, 'value', listener);
+}
+
+export async function setGroupTyping({ groupId, userId, username, isTyping }) {
+  if (!groupId || !userId) return;
+  const normalizedGroupId = String(groupId || '').trim();
+  const realtimeDb = getRealtimeDb();
+  const typingRef = ref(realtimeDb, `groupTyping/${normalizedGroupId}/${userId}`);
+  if (isTyping) {
+    await set(typingRef, { username: username || 'User', updatedAt: Date.now() });
+  } else {
+    await remove(typingRef);
+  }
+}
+
+export function subscribeGroupTyping(groupId, currentUserId, callback) {
+  const normalizedGroupId = String(groupId || '').trim();
+  if (!normalizedGroupId) return () => undefined;
+  const realtimeDb = getRealtimeDb();
+  const typingRef = ref(realtimeDb, `groupTyping/${normalizedGroupId}`);
+  const listener = (snap) => {
+    if (!snap.exists()) {
+      callback([]);
+      return;
+    }
+    const val = snap.val() || {};
+    const typers = Object.entries(val)
+      .filter(([uid]) => uid !== currentUserId)
+      .filter(([, v]) => Date.now() - Number(v.updatedAt || 0) < 5000)
+      .map(([, v]) => v.username || 'User');
+    callback(typers);
+  };
+  onValue(typingRef, listener);
+  return () => off(typingRef, 'value', listener);
+}
+
+// ===== MESSAGE PINNING =====
+
+export async function pinDmMessage({ userId, peerId, messageId, content }) {
+  if (!userId || !peerId || !messageId) return;
+  const realtimeDb = getRealtimeDb();
+  const threadId = directThreadId(userId, peerId);
+  await update(ref(realtimeDb, `dmPins/${threadId}/${messageId}`), {
+    messageId,
+    content: content || '',
+    pinnedBy: userId,
+    pinnedAt: Date.now()
+  });
+}
+
+export async function unpinDmMessage({ userId, peerId, messageId }) {
+  if (!userId || !peerId || !messageId) return;
+  const realtimeDb = getRealtimeDb();
+  const threadId = directThreadId(userId, peerId);
+  await remove(ref(realtimeDb, `dmPins/${threadId}/${messageId}`));
+}
+
+export function subscribePinnedDmMessages(userId, peerId, callback) {
+  if (!userId || !peerId) return () => undefined;
+  const realtimeDb = getRealtimeDb();
+  const threadId = directThreadId(userId, peerId);
+  const pinsRef = ref(realtimeDb, `dmPins/${threadId}`);
+  const listener = (snap) => {
+    if (!snap.exists()) {
+      callback([]);
+      return;
+    }
+    const val = snap.val() || {};
+    const pins = Object.values(val).sort((a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0));
+    callback(pins);
+  };
+  onValue(pinsRef, listener);
+  return () => off(pinsRef, 'value', listener);
+}
+
+export async function pinGroupMessage({ groupId, userId, messageId, content }) {
+  const normalizedGroupId = String(groupId || '').trim();
+  if (!normalizedGroupId || !userId || !messageId) return;
+  const realtimeDb = getRealtimeDb();
+  await update(ref(realtimeDb, `groupPins/${normalizedGroupId}/${messageId}`), {
+    messageId,
+    content: content || '',
+    pinnedBy: userId,
+    pinnedAt: Date.now()
+  });
+}
+
+export async function unpinGroupMessage({ groupId, messageId }) {
+  const normalizedGroupId = String(groupId || '').trim();
+  if (!normalizedGroupId || !messageId) return;
+  const realtimeDb = getRealtimeDb();
+  await remove(ref(realtimeDb, `groupPins/${normalizedGroupId}/${messageId}`));
+}
+
+export function subscribePinnedGroupMessages(groupId, callback) {
+  const normalizedGroupId = String(groupId || '').trim();
+  if (!normalizedGroupId) return () => undefined;
+  const realtimeDb = getRealtimeDb();
+  const pinsRef = ref(realtimeDb, `groupPins/${normalizedGroupId}`);
+  const listener = (snap) => {
+    if (!snap.exists()) {
+      callback([]);
+      return;
+    }
+    const val = snap.val() || {};
+    const pins = Object.values(val).sort((a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0));
+    callback(pins);
+  };
+  onValue(pinsRef, listener);
+  return () => off(pinsRef, 'value', listener);
 }

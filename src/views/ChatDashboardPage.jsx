@@ -22,7 +22,13 @@ import {
   setRecentDirectChatLocked,
   subscribeDirectMessages,
   subscribeRecentDirectChats,
-  subscribeUserPresence
+  subscribeUserPresence,
+  toggleDmReaction,
+  setDmTyping,
+  subscribeDmTyping,
+  pinDmMessage,
+  unpinDmMessage,
+  subscribePinnedDmMessages
 } from '../services/firebaseChat';
 import { motion } from 'framer-motion';
 import {
@@ -30,12 +36,17 @@ import {
   Lock,
   Archive,
   MessageCircle,
+  Mic,
+  MicOff,
   Phone,
+  Pin,
+  PinOff,
   MoreVertical,
   Pencil,
   Paperclip,
   Search,
   Send,
+  SmilePlus,
   Sparkles,
   Trash2,
   Video,
@@ -70,6 +81,16 @@ export default function ChatDashboardPage() {
   const [openMessageMenuId, setOpenMessageMenuId] = useState(null);
   const [recentMenu, setRecentMenu] = useState(null);
   const EDIT_WINDOW_MS = 15 * 60 * 1000;
+  const EMOJI_OPTIONS = ['👍', '❤️', '😂', '😮', '😢', '👏'];
+  const [msgSearchOpen, setMsgSearchOpen] = useState(false);
+  const [msgSearch, setMsgSearch] = useState('');
+  const [typingUsers, setTypingUsers] = useState([]);
+  const [pinnedMessages, setPinnedMessages] = useState([]);
+  const [openReactionPickerId, setOpenReactionPickerId] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
+  const typingTimeoutRef = useRef(null);
   const searchWrapRef = useRef(null);
   const searchInputRef = useRef(null);
   const mediaInputRef = useRef(null);
@@ -95,6 +116,14 @@ export default function ChatDashboardPage() {
       const target = e.target;
       if (target?.closest?.('[data-message-menu]')) return;
       setOpenMessageMenuId(null);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+
+  useEffect(() => {
+    const onDoc = (e) => {
+      if (!e.target?.closest?.('[data-reaction-picker]')) setOpenReactionPickerId(null);
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
@@ -155,10 +184,17 @@ export default function ChatDashboardPage() {
   };
 
   const clearPeer = () => {
+    if (user?.id && activeUserId.trim()) {
+      setDmTyping({ userId: user.id, peerId: activeUserId.trim(), username: user.username || 'User', isTyping: false }).catch(() => undefined);
+    }
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     setActiveUserId('');
     setPeerUsername('');
     setPeerPresence(null);
     setPeerAvatarFailed(false);
+    setMsgSearch('');
+    setMsgSearchOpen(false);
+    setOpenReactionPickerId(null);
   };
 
   useEffect(() => {
@@ -180,6 +216,33 @@ export default function ChatDashboardPage() {
       setPeerPresenceLoading(false);
     };
   }, [activeUserId]);
+
+  // Typing indicator subscription
+  useEffect(() => {
+    if (!user?.id || !activeUserId.trim()) {
+      setTypingUsers([]);
+      return;
+    }
+    const unsub = subscribeDmTyping(user.id, activeUserId.trim(), user.id, setTypingUsers);
+    return unsub;
+  }, [user?.id, activeUserId]);
+
+  // Pinned messages subscription
+  useEffect(() => {
+    if (!user?.id || !activeUserId.trim()) {
+      setPinnedMessages([]);
+      return;
+    }
+    const unsub = subscribePinnedDmMessages(user.id, activeUserId.trim(), setPinnedMessages);
+    return unsub;
+  }, [user?.id, activeUserId]);
+
+  // Tab title: show total unread count
+  useEffect(() => {
+    const total = recentChats.reduce((sum, c) => sum + Number(c.unreadCount || 0), 0);
+    document.title = total > 0 ? `(${total > 99 ? '99+' : total}) D-Lite` : 'D-Lite';
+    return () => { document.title = 'D-Lite'; };
+  }, [recentChats]);
 
   useEffect(() => {
     setRecentLoading(true);
@@ -412,6 +475,70 @@ export default function ChatDashboardPage() {
     } catch {
       setActionError('Could not delete message for you. Please try again.');
     }
+  };
+
+  const handleToggleDmReaction = async (messageId, emoji) => {
+    if (!user?.id || !activeUserId.trim() || !messageId) return;
+    setOpenReactionPickerId(null);
+    try {
+      await toggleDmReaction({ userId: user.id, peerId: activeUserId.trim(), messageId, emoji });
+    } catch { /* ignore */ }
+  };
+
+  const handlePinDmMessage = async (message) => {
+    if (!user?.id || !activeUserId.trim()) return;
+    setOpenMessageMenuId(null);
+    try {
+      await pinDmMessage({ userId: user.id, peerId: activeUserId.trim(), messageId: message._id, content: message.content || '' });
+    } catch { setActionError('Could not pin message.'); }
+  };
+
+  const handleUnpinDmMessage = async (messageId) => {
+    if (!user?.id || !activeUserId.trim()) return;
+    try {
+      await unpinDmMessage({ userId: user.id, peerId: activeUserId.trim(), messageId });
+    } catch { setActionError('Could not unpin message.'); }
+  };
+
+  const handleTypingInput = (e) => {
+    setInput(e.target.value);
+    if (!user?.id || !activeUserId.trim()) return;
+    setDmTyping({ userId: user.id, peerId: activeUserId.trim(), username: user.username || 'User', isTyping: true }).catch(() => undefined);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      setDmTyping({ userId: user.id, peerId: activeUserId.trim(), username: user.username || 'User', isTyping: false }).catch(() => undefined);
+    }, 3000);
+  };
+
+  const handleStartRecording = async () => {
+    if (!activeUserId.trim()) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordedChunksRef.current = [];
+      const mr = new MediaRecorder(stream);
+      mr.ondataavailable = (e) => { if (e.data.size > 0) recordedChunksRef.current.push(e.data); };
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
+        if (blob.size < 500) return;
+        const file = new File([blob], `voice-${Date.now()}.webm`, { type: 'audio/webm' });
+        setSendingMessage(true);
+        setActionError('');
+        try {
+          await sendDirectMedia({ senderId: user.id, receiverId: activeUserId.trim(), file });
+        } catch { setActionError('Could not send voice note.'); }
+        finally { setSendingMessage(false); }
+      };
+      mr.start();
+      mediaRecorderRef.current = mr;
+      setIsRecording(true);
+    } catch { setActionError('Microphone access denied.'); }
+  };
+
+  const handleStopRecording = () => {
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current = null;
+    setIsRecording(false);
   };
 
   const peerShort =
@@ -764,6 +891,17 @@ export default function ChatDashboardPage() {
               <div className="flex flex-wrap gap-2">
                 {activeUserId.trim() && user?.id ? (
                   <>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant={msgSearchOpen ? 'default' : 'ghost'}
+                      className="h-8 w-8 shrink-0"
+                      onClick={() => setMsgSearchOpen((o) => !o)}
+                      title="Search messages"
+                      aria-label="Search messages"
+                    >
+                      <Search className="h-4 w-4" />
+                    </Button>
                     <Button asChild size="sm" variant="secondary">
                       <Link href={`/call?callee=${encodeURIComponent(activeUserId.trim())}`}>
                         <Phone className="mr-1.5 h-4 w-4" />
@@ -792,6 +930,45 @@ export default function ChatDashboardPage() {
               </div>
             </div>
 
+            {/* Message search bar */}
+            {msgSearchOpen && activeUserId.trim() && (
+              <div className="shrink-0 border-b border-amber-200/60 bg-amber-50/60 px-4 py-2 dark:border-navy-700/40 dark:bg-navy-950/50">
+                <input
+                  autoFocus
+                  className="input py-1.5 text-sm"
+                  placeholder="Search messages…"
+                  value={msgSearch}
+                  onChange={(e) => setMsgSearch(e.target.value)}
+                />
+              </div>
+            )}
+
+            {/* Pinned messages banner */}
+            {pinnedMessages.length > 0 && activeUserId.trim() && (
+              <div className="shrink-0 border-b border-amber-200/60 bg-amber-50/80 dark:border-navy-700/40 dark:bg-navy-950/60">
+                {pinnedMessages.slice(0, 1).map((pin) => (
+                  <div key={pin.messageId} className="flex items-center gap-2 px-4 py-2">
+                    <Pin className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-sky-400" />
+                    <p className="min-w-0 flex-1 truncate text-xs font-medium text-amber-900 dark:text-slate-100">
+                      {pin.content || 'Pinned message'}
+                    </p>
+                    <button
+                      type="button"
+                      className="shrink-0 text-xs text-amber-600 hover:underline dark:text-sky-400"
+                      onClick={() => handleUnpinDmMessage(pin.messageId)}
+                    >
+                      Unpin
+                    </button>
+                  </div>
+                ))}
+                {pinnedMessages.length > 1 && (
+                  <p className="px-4 pb-1 text-[10px] text-amber-700/70 dark:text-slate-400/70">
+                    +{pinnedMessages.length - 1} more pinned
+                  </p>
+                )}
+              </div>
+            )}
+
             <div
               ref={messagesWrapRef}
               className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain bg-amber-50/20 px-3 py-3 dark:bg-navy-900/25 sm:px-4 sm:py-4"
@@ -817,60 +994,83 @@ export default function ChatDashboardPage() {
                 </div>
               )}
 
-              {messages.map((m, idx) => {
+              {messages
+                .filter((m) => !msgSearch.trim() || (m.content || '').toLowerCase().includes(msgSearch.trim().toLowerCase()))
+                .map((m, idx) => {
                 const mine = m.senderId === user?.id;
                 const peerKey = activeUserId.trim();
                 const createdAt = Number(m.createdAt || 0);
                 const canEditDelete = !m.isDeleted && createdAt && Date.now() - createdAt <= EDIT_WINDOW_MS;
                 const peerLabel = activeUserId.trim() ? peerUsername || peerShort : 'Peer';
                 const senderLabel = mine ? user?.username || 'You' : peerLabel;
+                const isPinned = pinnedMessages.some((p) => p.messageId === m._id);
+                const reactionEntries = Object.entries(m.reactions || {});
                 return (
                   <motion.div
                     key={m._id || idx}
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.2 }}
-                    className={cn('flex w-full', mine ? 'justify-end' : 'justify-start')}
+                    className={cn('group flex w-full flex-col', mine ? 'items-end' : 'items-start')}
                   >
-                    <div
-                      className={cn(
-                        'relative max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm shadow-sm sm:max-w-[70%]',
-                        mine
-                          ? 'rounded-br-md border border-amber-400/50 bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-amber-600/25'
-                          : 'rounded-bl-md border border-amber-200/80 bg-white text-amber-950 dark:border-navy-700/60 dark:bg-navy-950/80 dark:text-slate-50'
-                      )}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div
-                          className={cn(
-                            'truncate text-[11px] font-semibold tracking-wide',
-                            mine ? 'text-amber-100/95' : 'text-amber-600 dark:text-sky-400'
-                          )}
-                        >
-                          {senderLabel}
-                          {mine && (
-                            <div
-                              className={cn(
-                                'mt-0.5 text-[10px] font-semibold tracking-wide',
-                                m.readBy?.[peerKey]
-                                  ? 'text-emerald-100/95'
-                                  : m.deliveredBy?.[peerKey]
-                                    ? 'text-sky-100/95'
-                                    : 'text-white/70'
-                              )}
-                            >
-                              {m.readBy?.[peerKey] ? 'Read' : m.deliveredBy?.[peerKey] ? 'Delivered' : 'Sent'}
-                            </div>
-                          )}
-                        </div>
-                        {mine && (
+                    <div className="relative flex items-end gap-1">
+                      {/* Reaction picker trigger — visible on group hover */}
+                      <button
+                        type="button"
+                        data-reaction-picker
+                        className={cn(
+                          'mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-amber-200/80 bg-white text-base opacity-0 shadow transition group-hover:opacity-100 dark:border-navy-700/60 dark:bg-navy-950',
+                          mine ? 'order-first' : 'order-last'
+                        )}
+                        onClick={() => setOpenReactionPickerId((prev) => (prev === m._id ? null : m._id))}
+                        title="React"
+                      >
+                        <SmilePlus className="h-3.5 w-3.5 text-amber-600 dark:text-sky-400" />
+                      </button>
+
+                      <div
+                        className={cn(
+                          'relative max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm shadow-sm sm:max-w-[70%]',
+                          mine
+                            ? 'rounded-br-md border border-amber-400/50 bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-amber-600/25'
+                            : 'rounded-bl-md border border-amber-200/80 bg-white text-amber-950 dark:border-navy-700/60 dark:bg-navy-950/80 dark:text-slate-50'
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div
+                            className={cn(
+                              'truncate text-[11px] font-semibold tracking-wide',
+                              mine ? 'text-amber-100/95' : 'text-amber-600 dark:text-sky-400'
+                            )}
+                          >
+                            {senderLabel}
+                            {isPinned && <Pin className="ml-1 inline h-2.5 w-2.5 opacity-70" />}
+                            {mine && (
+                              <div
+                                className={cn(
+                                  'mt-0.5 text-[10px] font-semibold tracking-wide',
+                                  m.readBy?.[peerKey]
+                                    ? 'text-emerald-100/95'
+                                    : m.deliveredBy?.[peerKey]
+                                      ? 'text-sky-100/95'
+                                      : 'text-white/70'
+                                )}
+                              >
+                                {m.readBy?.[peerKey] ? 'Read' : m.deliveredBy?.[peerKey] ? 'Delivered' : 'Sent'}
+                              </div>
+                            )}
+                          </div>
                           <div className="relative -mr-1" data-message-menu>
                             <button
                               type="button"
-                              className="rounded-md p-1.5 text-amber-50/95 transition hover:bg-white/15 hover:text-white"
+                              className={cn(
+                                'rounded-md p-1.5 transition',
+                                mine
+                                  ? 'text-amber-50/95 hover:bg-white/15 hover:text-white'
+                                  : 'text-amber-500 hover:bg-amber-100 dark:text-slate-400 dark:hover:bg-navy-800/60'
+                              )}
                               onClick={() => setOpenMessageMenuId((prev) => (prev === m._id ? null : m._id))}
                               aria-label="Message actions"
-                              title="Message actions"
                             >
                               <MoreVertical className="h-4 w-4" />
                             </button>
@@ -880,99 +1080,138 @@ export default function ChatDashboardPage() {
                                 role="menu"
                                 className="anim-pop absolute right-0 top-full z-50 mt-1.5 min-w-[170px] overflow-hidden rounded-2xl border border-amber-200/90 bg-white py-1.5 shadow-xl shadow-amber-900/10 dark:border-navy-700/60 dark:bg-navy-950"
                               >
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-amber-950 transition-colors duration-150 hover:bg-amber-100 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-50 dark:hover:bg-navy-800/60"
-                                  onClick={() => handleEditMessage(m)}
-                                  disabled={!canEditDelete}
-                                  title={canEditDelete ? 'Edit message' : 'Edit only available for 15 minutes'}
-                                >
-                                  <Pencil className="h-4 w-4 shrink-0 opacity-80" />
-                                  Edit message
-                                </button>
-
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-700 transition-colors duration-150 hover:bg-red-50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60 dark:text-red-400 dark:hover:bg-red-950/50"
-                                  onClick={() => {
-                                    if (!canEditDelete) return;
-                                    setOpenMessageMenuId(null);
-                                    handleDeleteMessage(m._id);
-                                  }}
-                                  disabled={!canEditDelete || deletingMessageId === m._id}
-                                  title={canEditDelete ? 'Unsend message for everyone' : 'Unsend only available for 15 minutes'}
-                                >
-                                  <Trash2 className="h-4 w-4 shrink-0" />
-                                  {deletingMessageId === m._id ? 'Unsending…' : 'Unsend message'}
-                                </button>
-
+                                {mine && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      role="menuitem"
+                                      className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-amber-950 transition-colors duration-150 hover:bg-amber-100 disabled:pointer-events-none disabled:opacity-60 dark:text-slate-50 dark:hover:bg-navy-800/60"
+                                      onClick={() => handleEditMessage(m)}
+                                      disabled={!canEditDelete}
+                                    >
+                                      <Pencil className="h-4 w-4 shrink-0 opacity-80" />
+                                      Edit message
+                                    </button>
+                                    <button
+                                      type="button"
+                                      role="menuitem"
+                                      className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-700 transition-colors duration-150 hover:bg-red-50 disabled:pointer-events-none disabled:opacity-60 dark:text-red-400 dark:hover:bg-red-950/50"
+                                      onClick={() => { if (!canEditDelete) return; setOpenMessageMenuId(null); handleDeleteMessage(m._id); }}
+                                      disabled={!canEditDelete || deletingMessageId === m._id}
+                                    >
+                                      <Trash2 className="h-4 w-4 shrink-0" />
+                                      {deletingMessageId === m._id ? 'Unsending…' : 'Unsend message'}
+                                    </button>
+                                  </>
+                                )}
                                 <button
                                   type="button"
                                   role="menuitem"
                                   className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-amber-950 transition-colors duration-150 hover:bg-amber-100 dark:text-slate-50 dark:hover:bg-navy-800/60"
-                                  onClick={() => handleDeleteForMe(m._id)}
-                                  title="Delete only from your chat"
+                                  onClick={isPinned ? () => { handleUnpinDmMessage(m._id); setOpenMessageMenuId(null); } : () => handlePinDmMessage(m)}
                                 >
-                                  <Trash2 className="h-4 w-4 shrink-0 opacity-80" />
-                                  Delete for me
+                                  {isPinned ? <PinOff className="h-4 w-4 shrink-0 opacity-80" /> : <Pin className="h-4 w-4 shrink-0 opacity-80" />}
+                                  {isPinned ? 'Unpin message' : 'Pin message'}
                                 </button>
+                                {mine && (
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-amber-950 transition-colors duration-150 hover:bg-amber-100 dark:text-slate-50 dark:hover:bg-navy-800/60"
+                                    onClick={() => handleDeleteForMe(m._id)}
+                                  >
+                                    <Trash2 className="h-4 w-4 shrink-0 opacity-80" />
+                                    Delete for me
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
-                        )}
+                        </div>
+                        {m.mediaType === 'image' && m.mediaUrl ? (
+                          <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="mt-2 block">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={m.mediaUrl} alt={m.fileName || 'Shared image'} className="max-h-72 w-auto rounded-xl object-cover" />
+                          </a>
+                        ) : null}
+                        {m.mediaType === 'video' && m.mediaUrl ? (
+                          <video src={m.mediaUrl} controls className="mt-2 max-h-72 w-full rounded-xl bg-black" />
+                        ) : null}
+                        {m.mediaType === 'audio' && m.mediaUrl ? (
+                          <audio src={m.mediaUrl} controls className="mt-2 w-full" />
+                        ) : null}
+                        {m.mediaType === 'file' && m.mediaUrl ? (
+                          <a
+                            href={m.mediaUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={cn(
+                              'mt-2 block rounded-xl border px-3 py-2 text-sm no-underline transition hover:brightness-[1.02]',
+                              mine
+                                ? 'border-white/25 bg-white/10 text-white hover:bg-white/15'
+                                : 'border-amber-200/80 bg-white text-amber-950 hover:bg-amber-50 dark:border-navy-700/60 dark:bg-navy-950/70 dark:text-slate-50 dark:hover:bg-navy-900/60'
+                            )}
+                          >
+                            <div className="truncate font-semibold">{m.fileName || 'Download file'}</div>
+                            <div className={cn('mt-0.5 text-xs opacity-80', mine ? 'text-amber-100/90' : '')}>Open / download</div>
+                          </a>
+                        ) : null}
+                        {(m.content || m.isDeleted) ? (
+                          <p className={cn('mt-1 leading-relaxed', m.isDeleted ? 'italic opacity-80' : mine ? 'text-white' : 'text-amber-950 dark:text-slate-50')}>
+                            {m.content}
+                          </p>
+                        ) : null}
                       </div>
-                      {m.mediaType === 'image' && m.mediaUrl ? (
-                        <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="mt-2 block">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={m.mediaUrl}
-                            alt={m.fileName || 'Shared image'}
-                            className="max-h-72 w-auto rounded-xl object-cover"
-                          />
-                        </a>
-                      ) : null}
-                      {m.mediaType === 'video' && m.mediaUrl ? (
-                        <video
-                          src={m.mediaUrl}
-                          controls
-                          className="mt-2 max-h-72 w-full rounded-xl bg-black"
-                        />
-                      ) : null}
-                      {m.mediaType === 'file' && m.mediaUrl ? (
-                        <a
-                          href={m.mediaUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={cn(
-                            'mt-2 block rounded-xl border px-3 py-2 text-sm no-underline transition hover:brightness-[1.02]',
-                            mine
-                              ? 'border-white/25 bg-white/10 text-white hover:bg-white/15'
-                              : 'border-amber-200/80 bg-white text-amber-950 hover:bg-amber-50 dark:border-navy-700/60 dark:bg-navy-950/70 dark:text-slate-50 dark:hover:bg-navy-900/60'
-                          )}
-                        >
-                          <div className="truncate font-semibold">{m.fileName || 'Download file'}</div>
-                          <div className={cn('mt-0.5 text-xs opacity-80', mine ? 'text-amber-100/90' : '')}>
-                            Open / download
-                          </div>
-                        </a>
-                      ) : null}
-                      {(m.content || m.isDeleted) ? (
-                        <p
-                          className={cn(
-                            'mt-1 leading-relaxed',
-                            m.isDeleted
-                              ? 'italic opacity-80'
-                              : mine
-                                ? 'text-white'
-                                : 'text-amber-950 dark:text-slate-50'
-                          )}
-                        >
-                          {m.content}
-                        </p>
-                      ) : null}
                     </div>
+
+                    {/* Emoji reaction picker */}
+                    {openReactionPickerId === m._id && (
+                      <div
+                        data-reaction-picker
+                        className={cn(
+                          'mt-1 flex gap-1 rounded-full border border-amber-200/80 bg-white px-2 py-1 shadow-md dark:border-navy-700/60 dark:bg-navy-950',
+                          mine ? 'mr-8' : 'ml-8'
+                        )}
+                      >
+                        {EMOJI_OPTIONS.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            className="rounded-full px-1 py-0.5 text-base transition hover:scale-125"
+                            onClick={() => handleToggleDmReaction(m._id, emoji)}
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Reactions display */}
+                    {reactionEntries.length > 0 && (
+                      <div className={cn('mt-1 flex flex-wrap gap-1', mine ? 'mr-8 justify-end' : 'ml-8')}>
+                        {reactionEntries.map(([emoji, users]) => {
+                          const count = Object.keys(users || {}).length;
+                          if (!count) return null;
+                          const reacted = !!(users || {})[user?.id];
+                          return (
+                            <button
+                              key={emoji}
+                              type="button"
+                              className={cn(
+                                'flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition',
+                                reacted
+                                  ? 'border-amber-400 bg-amber-100 dark:border-sky-500 dark:bg-navy-800'
+                                  : 'border-amber-200/80 bg-white dark:border-navy-700 dark:bg-navy-900'
+                              )}
+                              onClick={() => handleToggleDmReaction(m._id, emoji)}
+                            >
+                              <span>{emoji}</span>
+                              <span className={reacted ? 'text-amber-700 dark:text-sky-400' : 'text-amber-800 dark:text-slate-300'}>{count}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </motion.div>
                 );
               })}
@@ -1022,6 +1261,15 @@ export default function ChatDashboardPage() {
               )}
             </div>
 
+            {/* Typing indicator */}
+            {typingUsers.length > 0 && (
+              <div className="shrink-0 px-4 py-1 text-xs text-amber-700/80 dark:text-slate-400">
+                <span className="animate-pulse">
+                  {typingUsers.join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing…
+                </span>
+              </div>
+            )}
+
             <form
               className="flex flex-col gap-2 border-t border-amber-200/60 bg-white/80 p-3 dark:border-navy-700/40 dark:bg-navy-950/70 sm:flex-row sm:items-center"
               onSubmit={sendMessage}
@@ -1038,23 +1286,36 @@ export default function ChatDashboardPage() {
                 variant="secondary"
                 size="icon"
                 className="h-10 w-10 shrink-0"
-                disabled={!activeUserId.trim() || sendingMessage}
+                disabled={!activeUserId.trim() || sendingMessage || isRecording}
                 onClick={() => mediaInputRef.current?.click()}
                 title="Share photo, video, or file"
                 aria-label="Share photo, video, or file"
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant={isRecording ? 'default' : 'secondary'}
+                className={cn('h-10 w-10 shrink-0', isRecording && 'animate-pulse bg-red-500 hover:bg-red-600')}
+                disabled={!activeUserId.trim() || sendingMessage}
+                onClick={isRecording ? handleStopRecording : handleStartRecording}
+                title={isRecording ? 'Stop recording' : 'Record voice note'}
+                aria-label={isRecording ? 'Stop recording' : 'Record voice note'}
+              >
+                {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </Button>
               <input
                 className="input flex-1"
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={handleTypingInput}
                 placeholder={activeUserId.trim() ? 'Type a message…' : 'Choose someone to chat…'}
+                disabled={isRecording}
               />
               <Button
                 className="shrink-0 gap-2 sm:px-6"
                 type="submit"
-                disabled={!activeUserId.trim() || !input.trim() || sendingMessage}
+                disabled={!activeUserId.trim() || !input.trim() || sendingMessage || isRecording}
               >
                 <Send className="h-4 w-4" />
                 {sendingMessage ? 'Sending…' : 'Send'}
