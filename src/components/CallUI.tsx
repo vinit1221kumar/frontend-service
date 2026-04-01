@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
+  Maximize2,
   Mic,
   MicOff,
+  Minimize2,
+  Monitor,
+  MonitorOff,
   Phone,
   PhoneCall,
   PhoneIncoming,
@@ -139,6 +143,9 @@ export default function CallUI({
   const initialMode = queryMode === "audio" || queryMode === "video" ? queryMode : defaultMode;
   const callModeRef = useRef<CallMode>(initialMode);
 
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const [calleeId, setCalleeId] = useState(calleeParam);
   const [calleeUsername, setCalleeUsername] = useState<string>("");
   const [peerDisplayName, setPeerDisplayName] = useState<string>("");
@@ -154,6 +161,9 @@ export default function CallUI({
   const [error, setError] = useState<string | null>(null);
   const [micEnabled, setMicEnabled] = useState(true);
   const [cameraEnabled, setCameraEnabled] = useState(defaultMode === "video");
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [callDuration, setCallDuration] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
     setCalleeId(calleeParam);
@@ -235,6 +245,25 @@ export default function CallUI({
       cancelled = true;
     };
   }, [incomingOffer?.fromUserId, peerId]);
+
+  // Call duration timer
+  useEffect(() => {
+    if (status === "connected") {
+      setCallDuration(0);
+      durationIntervalRef.current = setInterval(() => setCallDuration((prev) => prev + 1), 1000);
+    } else {
+      if (durationIntervalRef.current) {
+        clearInterval(durationIntervalRef.current);
+        durationIntervalRef.current = null;
+      }
+      if (status === "idle" || status === "ended" || status === "failed") {
+        setCallDuration(0);
+      }
+    }
+    return () => {
+      if (durationIntervalRef.current) clearInterval(durationIntervalRef.current);
+    };
+  }, [status]);
 
   const clearSessionListeners = useCallback(() => {
     sessionUnsubRefs.current.forEach((unsubscribe) => unsubscribe());
@@ -560,6 +589,70 @@ export default function CallUI({
     });
     setCameraEnabled(nextEnabled);
   }, [cameraEnabled]);
+
+  const toggleScreenShare = useCallback(async () => {
+    const pc = peerConnectionRef.current;
+    if (!pc) return;
+    if (isScreenSharing) {
+      screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+      screenStreamRef.current = null;
+      const camTrack = localStreamRef.current?.getVideoTracks()[0];
+      const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+      if (sender && camTrack) {
+        sender.replaceTrack(camTrack).catch(() => undefined);
+      }
+      if (localVideoRef.current && localStreamRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
+      setIsScreenSharing(false);
+    } else {
+      try {
+        const screen = await (navigator.mediaDevices as MediaDevices & {
+          getDisplayMedia: (c: DisplayMediaStreamOptions) => Promise<MediaStream>;
+        }).getDisplayMedia({ video: true, audio: false });
+        screenStreamRef.current = screen;
+        const screenTrack = screen.getVideoTracks()[0];
+        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+        if (sender) sender.replaceTrack(screenTrack).catch(() => undefined);
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = new MediaStream([screenTrack]);
+        }
+        screenTrack.onended = () => {
+          screenStreamRef.current = null;
+          const camTrack2 = localStreamRef.current?.getVideoTracks()[0];
+          const sender2 = peerConnectionRef.current?.getSenders().find((s) => s.track?.kind === "video");
+          if (sender2 && camTrack2) sender2.replaceTrack(camTrack2).catch(() => undefined);
+          if (localVideoRef.current && localStreamRef.current) {
+            localVideoRef.current.srcObject = localStreamRef.current;
+          }
+          setIsScreenSharing(false);
+        };
+        setIsScreenSharing(true);
+      } catch {
+        /* user cancelled or permission denied */
+      }
+    }
+  }, [isScreenSharing]);
+
+  function formatDuration(secs: number) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  // Auto-accept call when navigated from global incoming call overlay
+  useEffect(() => {
+    if (status !== "ringing" || !incomingOffer || isBusy) return;
+    try {
+      const autoFrom = sessionStorage.getItem("dlite-auto-accept-from");
+      if (autoFrom && autoFrom === incomingOffer.fromUserId) {
+        sessionStorage.removeItem("dlite-auto-accept-from");
+        acceptIncomingCall();
+      }
+    } catch { /* ignore */ }
+  }, [status, incomingOffer, isBusy, acceptIncomingCall]);
 
   useEffect(() => {
     if (!currentUserId) return;
