@@ -14,7 +14,6 @@ import {
   PhoneIncoming,
   PhoneOff,
   Radio,
-  Search,
   UserRound,
   Video,
   VideoOff,
@@ -145,6 +144,7 @@ export default function CallUI({
 
   const screenStreamRef = useRef<MediaStream | null>(null);
   const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const overlayVideoRef = useRef<HTMLVideoElement>(null);
 
   const [calleeId, setCalleeId] = useState(calleeParam);
   const [calleeUsername, setCalleeUsername] = useState<string>("");
@@ -642,6 +642,13 @@ export default function CallUI({
     return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   }
 
+  // Sync remote stream to overlay video element when connected
+  useEffect(() => {
+    if (status === "connected" && overlayVideoRef.current && remoteStreamRef.current) {
+      overlayVideoRef.current.srcObject = remoteStreamRef.current;
+    }
+  }, [status]);
+
   // Auto-accept call when navigated from global incoming call overlay
   useEffect(() => {
     if (status !== "ringing" || !incomingOffer || isBusy) return;
@@ -728,6 +735,98 @@ export default function CallUI({
     : "flex aspect-video items-center justify-center rounded bg-slate-900 text-sm text-slate-200";
 
   return (
+    <>
+    {/* WhatsApp-style fullscreen connected overlay */}
+    {status === "connected" && (
+      <div className={cn("fixed inset-0 z-[200] flex flex-col bg-black", isFullscreen ? "" : "")}>
+        {/* Remote video — fills background */}
+        {activeMode === "video" ? (
+          <video
+            ref={overlayVideoRef}
+            autoPlay
+            playsInline
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-slate-900 to-black">
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex h-24 w-24 items-center justify-center rounded-full bg-white/10 text-white">
+                <span className="text-4xl font-bold">{(peerDisplayName || "?").slice(0, 1).toUpperCase()}</span>
+              </div>
+              <p className="text-lg font-semibold text-white">{peerDisplayName || peerId}</p>
+              <p className="animate-pulse text-sm text-white/70">Voice call connected</p>
+            </div>
+          </div>
+        )}
+
+        {/* Top bar */}
+        <div className="relative z-10 flex items-start justify-between px-5 pt-10 pb-4 bg-gradient-to-b from-black/60 to-transparent">
+          <div>
+            <p className="text-lg font-bold text-white drop-shadow">{peerDisplayName || peerId}</p>
+            <div className="mt-1 flex items-center gap-1.5">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+              <span className="text-sm font-semibold text-emerald-300">{formatDuration(callDuration)}</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsFullscreen((v) => !v)}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur-sm hover:bg-white/25"
+            aria-label="Toggle fullscreen"
+          >
+            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </button>
+        </div>
+
+        {/* PiP local video */}
+        {activeMode === "video" && (
+          <div className="absolute right-4 top-20 z-20 h-32 w-24 overflow-hidden rounded-2xl border-2 border-white/30 shadow-2xl sm:h-40 sm:w-28">
+            <video ref={localVideoRef} autoPlay muted playsInline className="h-full w-full object-cover" />
+          </div>
+        )}
+
+        {/* Bottom controls */}
+        <div className="relative z-10 mt-auto flex items-center justify-center gap-5 px-6 pb-12 pt-6 bg-gradient-to-t from-black/70 to-transparent">
+          <button
+            type="button"
+            onClick={toggleMic}
+            className={cn("flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-full text-white transition-colors", micEnabled ? "bg-white/20 hover:bg-white/30" : "bg-red-500 hover:bg-red-600")}
+            aria-label={micEnabled ? "Mute" : "Unmute"}
+          >
+            {micEnabled ? <Mic className="h-6 w-6" /> : <MicOff className="h-6 w-6" />}
+          </button>
+          {activeMode === "video" && (
+            <button
+              type="button"
+              onClick={toggleCamera}
+              disabled={!canToggleCamera}
+              className={cn("flex h-14 w-14 items-center justify-center rounded-full text-white transition-colors", cameraEnabled ? "bg-white/20 hover:bg-white/30" : "bg-slate-600 hover:bg-slate-700")}
+              aria-label={cameraEnabled ? "Camera off" : "Camera on"}
+            >
+              {cameraEnabled ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
+            </button>
+          )}
+          {activeMode === "video" && (
+            <button
+              type="button"
+              onClick={toggleScreenShare}
+              className={cn("flex h-14 w-14 items-center justify-center rounded-full text-white transition-colors", isScreenSharing ? "bg-sky-500 hover:bg-sky-600" : "bg-white/20 hover:bg-white/30")}
+              aria-label={isScreenSharing ? "Stop sharing" : "Share screen"}
+            >
+              {isScreenSharing ? <MonitorOff className="h-6 w-6" /> : <Monitor className="h-6 w-6" />}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={leaveCall}
+            className="flex h-16 w-16 items-center justify-center rounded-full bg-red-500 text-white shadow-lg hover:bg-red-600"
+            aria-label="End call"
+          >
+            <PhoneOff className="h-7 w-7" />
+          </button>
+        </div>
+      </div>
+    )}
     <section className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 sm:p-8">
       <div
         className={cn(
@@ -931,6 +1030,22 @@ export default function CallUI({
             </>
           )}
         </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={toggleScreenShare}
+          disabled={status !== "connected" || !isVideoMode}
+          className={cn(isEnhanced && "rounded-2xl px-5", isScreenSharing && "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300")}
+        >
+          {isScreenSharing ? <MonitorOff className="mr-2 h-4 w-4" /> : <Monitor className="mr-2 h-4 w-4" />}
+          {isScreenSharing ? "Stop share" : "Share screen"}
+        </Button>
+        {status === "connected" && (
+          <div className={cn("flex items-center gap-2 rounded-2xl border border-emerald-200/70 bg-emerald-50/70 px-4 py-2 text-sm font-semibold text-emerald-700 dark:border-emerald-700/40 dark:bg-emerald-900/20 dark:text-emerald-300", isEnhanced && "rounded-2xl")}>
+            <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+            {formatDuration(callDuration)}
+          </div>
+        )}
       </div>
 
       <div className={panelClassName}>
@@ -1042,5 +1157,6 @@ export default function CallUI({
         </div>
       </div>
     </section>
+    </>
   );
 }
