@@ -17,7 +17,7 @@ import {
   update
 } from 'firebase/database';
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
-import { getFirebaseStorage, getRealtimeDb } from './firebaseClient';
+import { getFirebaseAuth, getFirebaseStorage, getRealtimeDb } from './firebaseClient';
 import { subscribeToAuthState } from './firebaseAuth';
 
 function directThreadId(userA, userB) {
@@ -543,6 +543,21 @@ export function initializeMyPresence(userId) {
 
   const connectedListener = async (snap) => {
     if (snap.val() !== true) return;
+
+    // Wait until Firebase Auth confirms the current user matches userId.
+    // The RTDB WebSocket auth token propagation can lag behind onAuthStateChanged,
+    // so we retry a few times with a small delay before giving up.
+    let authed = false;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const currentUser = getFirebaseAuth()?.currentUser;
+      if (currentUser?.uid === userId) {
+        authed = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+    }
+    if (!authed) return;
+
     try {
       await onDisconnect(currentSessionRef).remove();
       await set(currentSessionRef, {
