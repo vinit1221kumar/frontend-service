@@ -1,5 +1,7 @@
 import {
+  endAt,
   get,
+  limitToFirst,
   onChildChanged,
   onChildRemoved,
   limitToLast,
@@ -14,6 +16,7 @@ import {
   remove,
   runTransaction,
   set,
+  startAt,
   update
 } from 'firebase/database';
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
@@ -325,19 +328,31 @@ export async function searchUsersByUsername(term, excludeUserId) {
   const realtimeDb = getRealtimeDb();
   const value = term.trim().toLowerCase();
   if (!value) return [];
-  const usersSnap = await get(ref(realtimeDb, 'users'));
+
+  // Use an ordered range query so we only read matching records, not the whole users node.
+  // Requires ".indexOn": ["username"] in Firebase rules (already set).
+  const usersQuery = query(
+    ref(realtimeDb, 'users'),
+    orderByChild('username'),
+    startAt(value),
+    endAt(value + '\uf8ff'),
+    limitToFirst(20)
+  );
+
+  const usersSnap = await get(usersQuery);
   if (!usersSnap.exists()) return [];
-  const users = usersSnap.val();
-  return Object.values(users)
-    .filter((user) => user?.uid && user.uid !== excludeUserId)
-    // Prefix search: only match usernames starting with the typed query.
-    // (Client-side fallback; keeps behaviour stable even if DB indexing differs.)
-    .filter((user) => (user.username || '').toLowerCase().startsWith(value))
-    .slice(0, 20)
-    .map((user) => ({
-      id: user.uid,
-      username: user.username || user.email?.split('@')[0] || 'User'
-    }));
+
+  const results = [];
+  usersSnap.forEach((child) => {
+    const user = child.val();
+    if (user?.uid && user.uid !== excludeUserId) {
+      results.push({
+        id: user.uid,
+        username: user.username || user.email?.split('@')[0] || 'User'
+      });
+    }
+  });
+  return results;
 }
 
 export async function getUserProfileById(userId) {
@@ -541,35 +556,42 @@ export function initializeMyPresence(userId) {
     }).catch(() => undefined);
   };
 
+  const writeSession = async () => {
+    await onDisconnect(currentSessionRef).remove();
+    await set(currentSessionRef, { connectedAt: Date.now(), updatedAt: Date.now() });
+    await update(userPresenceRef, { online: true, lastSeen: null });
+  };
+
   const connectedListener = async (snap) => {
     if (snap.val() !== true) return;
 
-    // Wait until Firebase Auth confirms the current user matches userId.
-    // The RTDB WebSocket auth token propagation can lag behind onAuthStateChanged,
-    // so we retry a few times with a small delay before giving up.
-    let authed = false;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const currentUser = getFirebaseAuth()?.currentUser;
-      if (currentUser?.uid === userId) {
-        authed = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
-    }
-    if (!authed) return;
+    const auth = getFirebaseAuth();
+    const currentUser = auth?.currentUser;
+    // Guard: only write if auth confirms this user is signed in.
+    if (!currentUser || currentUser.uid !== userId) return;
 
     try {
-      await onDisconnect(currentSessionRef).remove();
-      await set(currentSessionRef, {
-        connectedAt: Date.now(),
-        updatedAt: Date.now()
-      });
-      await update(userPresenceRef, {
-        online: true,
-        lastSeen: null
-      });
-    } catch {
-      /* ignore transient presence sync failures */
+      // Calling getIdToken() ensures the RTDB WebSocket receives the latest
+      // auth token before we attempt the write — the SDK re-authenticates
+      // the socket when a fresh token is obtained.
+      await currentUser.getIdToken();
+      await writeSession();
+    } catch (firstErr) {
+      const isPermDenied =
+        String(firstErr?.code).includes('permission') ||
+        String(firstErr?.message).toLowerCase().includes('permission_denied');
+
+      if (!isPermDenied) return;
+
+      // On permission_denied, force a token refresh and retry once.
+      // The RTDB socket auth can lag by a few hundred ms after onAuthStateChanged.
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      try {
+        await currentUser.getIdToken(/* forceRefresh */ true);
+        await writeSession();
+      } catch {
+        /* best-effort — presence will recover on next reconnect */
+      }
     }
   };
 
