@@ -689,6 +689,111 @@ export async function listDirectMessages(userId, peerId) {
     .sort((a, b) => a.createdAt - b.createdAt);
 }
 
+/**
+ * Export last N direct messages for the given thread.
+ * Returned format is designed to be importable by `importDirectChatHistory`.
+ */
+export async function exportDirectChatHistory({ userId, peerId, limit = 100 }) {
+  const realtimeDb = getRealtimeDb();
+  const uid = String(userId || '').trim();
+  const pid = String(peerId || '').trim();
+  if (!uid || !pid) throw new Error('UserId and peerId are required.');
+
+  const threadId = directThreadId(uid, pid);
+  const safeLimit = Number(limit || 0);
+  const threadRef = query(ref(realtimeDb, `dmMessages/${threadId}`), limitToLast(safeLimit || 100));
+
+  const snap = await get(threadRef);
+  const messages = [];
+  if (snap.exists()) {
+    const raw = snap.val() || {};
+    messages.push(
+      ...Object.entries(raw).map(([id, value]) => ({
+        id,
+        ...(value || {}),
+        // keep sender/receiver explicit for validation during import
+        senderId: String((value || {}).senderId || ''),
+        receiverId: String((value || {}).receiverId || '')
+      }))
+    );
+  }
+
+  return {
+    type: 'direct',
+    version: 1,
+    exportedAt: Date.now(),
+    threadId,
+    participants: [uid, pid],
+    limit: safeLimit || 100,
+    messages
+  };
+}
+
+/**
+ * Import a previously exported direct chat history.
+ * Note: This restores messages into `dmMessages/${threadId}` and then refreshes indexes.
+ *
+ * Security note: We allow restoring only messages where `senderId` is either `userId` or `peerId`.
+ * Receiver is re-derived from sender to prevent spoofing.
+ */
+export async function importDirectChatHistory({ userId, peerId, payload }) {
+  const realtimeDb = getRealtimeDb();
+  const uid = String(userId || '').trim();
+  const pid = String(peerId || '').trim();
+  if (!uid || !pid) throw new Error('UserId and peerId are required.');
+  if (!payload || payload.type !== 'direct') throw new Error('Invalid direct chat payload.');
+
+  const threadId = directThreadId(uid, pid);
+
+  const rawMessages = Array.isArray(payload.messages) ? payload.messages : [];
+  if (rawMessages.length === 0) throw new Error('No messages found in payload.');
+
+  const allowedSenders = new Set([uid, pid]);
+  const updates = {};
+  const messagesForIndex = [];
+
+  rawMessages.forEach((m) => {
+    const messageId = String(m?.id || '').trim();
+    const senderId = String(m?.senderId || '').trim();
+    if (!messageId) return; // keep implementation simple and predictable for now
+    if (!allowedSenders.has(senderId)) return; // prevent spoofing
+
+    const expectedReceiverId = senderId === uid ? pid : uid;
+    const createdAt = Number(m?.createdAt || m?.firebaseCreatedAt || Date.now());
+
+    const valueToWrite = {
+      senderId,
+      receiverId: expectedReceiverId,
+      content: String(m?.content || ''),
+      mediaUrl: typeof m?.mediaUrl === 'string' ? m.mediaUrl : '',
+      mediaType: String(m?.mediaType || ''),
+      fileName: typeof m?.fileName === 'string' ? m.fileName : '',
+      fileSize: Number(m?.fileSize || 0),
+      contentType: typeof m?.contentType === 'string' ? m.contentType : '',
+      createdAt,
+      updatedAt: m?.updatedAt == null ? null : Number(m.updatedAt),
+      isDeleted: Boolean(m?.isDeleted),
+      deletedAt: m?.deletedAt == null ? null : Number(m.deletedAt),
+      deletedBy: typeof m?.deletedBy === 'string' ? m.deletedBy : null,
+      deliveredBy: m?.deliveredBy && typeof m.deliveredBy === 'object' ? m.deliveredBy : {},
+      readBy: m?.readBy && typeof m.readBy === 'object' ? m.readBy : {},
+      reactions: m?.reactions && typeof m.reactions === 'object' ? m.reactions : {}
+    };
+
+    updates[`dmMessages/${threadId}/${messageId}`] = valueToWrite;
+    messagesForIndex.push(valueToWrite);
+  });
+
+  if (Object.keys(updates).length === 0) throw new Error('No valid messages to import (spoofed/invalid data).');
+
+  await update(ref(realtimeDb), updates);
+
+  // Refresh direct chat indexes so the thread shows up correctly in the dashboard.
+  await syncRecentDirectChats({ realtimeDb, userId: uid, peerId: pid, threadId });
+
+  return { ok: true, imported: messagesForIndex.length };
+}
+
 export function subscribeDirectMessages(userId, peerId, callback) {
   const realtimeDb = getRealtimeDb();
   const threadId = directThreadId(userId, peerId);
@@ -1021,6 +1126,93 @@ export async function listGroupMessages(groupId) {
   return Object.entries(snap.val())
     .map(([id, value]) => mapGroupMessage(id, value))
     .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/**
+ * Export last N group messages for a groupId.
+ */
+export async function exportGroupChatHistory({ groupId, limit = 150 }) {
+  const realtimeDb = getRealtimeDb();
+  const gid = String(groupId || '').trim();
+  if (!gid) throw new Error('groupId is required.');
+
+  const safeLimit = Number(limit || 0);
+  const groupMessagesRef = query(ref(realtimeDb, `groupMessages/${gid}`), limitToLast(safeLimit || 150));
+
+  const [messagesSnap, groupSnap] = await Promise.all([get(groupMessagesRef), get(ref(realtimeDb, `groups/${gid}`))]);
+  const messages = [];
+  if (messagesSnap.exists()) {
+    const raw = messagesSnap.val() || {};
+    messages.push(
+      ...Object.entries(raw).map(([id, value]) => ({
+        id,
+        ...(value || {}),
+        senderId: String((value || {}).senderId || ''),
+        message: String((value || {}).message || '')
+      }))
+    );
+  }
+
+  return {
+    type: 'group',
+    version: 1,
+    exportedAt: Date.now(),
+    groupId: gid,
+    group: groupSnap.exists() ? groupSnap.val() : null,
+    limit: safeLimit || 150,
+    messages
+  };
+}
+
+/**
+ * Import a previously exported group chat history into `groupMessages/${groupId}`.
+ * Security: Only group members can import. Sender spoofing is allowed (historical messages),
+ * but groupId is enforced by the target path.
+ */
+export async function importGroupChatHistory({ groupId, userId, payload }) {
+  const realtimeDb = getRealtimeDb();
+  const gid = String(groupId || '').trim();
+  const uid = String(userId || '').trim();
+  if (!gid || !uid) throw new Error('groupId and userId are required.');
+  if (!payload || payload.type !== 'group') throw new Error('Invalid group chat payload.');
+
+  const membershipSnap = await get(ref(realtimeDb, `groups/${gid}/members/${uid}`));
+  if (!membershipSnap.exists() || !membershipSnap.val()) throw new Error('You are not a member of this group.');
+
+  const rawMessages = Array.isArray(payload.messages) ? payload.messages : [];
+  if (rawMessages.length === 0) throw new Error('No messages found in payload.');
+
+  const updates = {};
+  let importedCount = 0;
+
+  rawMessages.forEach((m) => {
+    const messageId = String(m?.id || '').trim();
+    if (!messageId) return;
+
+    const senderId = String(m?.senderId || '').trim();
+    if (!senderId) return;
+
+    const createdAt = Number(m?.createdAt || m?.firebaseCreatedAt || Date.now());
+    const messageValue = String(m?.message ?? m?.content ?? '');
+
+    updates[`groupMessages/${gid}/${messageId}`] = {
+      groupId: gid,
+      senderId,
+      message: messageValue,
+      createdAt,
+      deliveredBy: m?.deliveredBy && typeof m.deliveredBy === 'object' ? m.deliveredBy : {},
+      readBy: m?.readBy && typeof m.readBy === 'object' ? m.readBy : {},
+      reactions: m?.reactions && typeof m.reactions === 'object' ? m.reactions : {}
+    };
+    importedCount += 1;
+  });
+
+  if (Object.keys(updates).length === 0) throw new Error('No valid messages to import.');
+
+  await update(ref(realtimeDb), updates);
+  await update(ref(realtimeDb), { [`groups/${gid}/updatedAt`]: Date.now() });
+
+  return { ok: true, imported: importedCount };
 }
 
 export function subscribeGroupMessages(groupId, callback) {

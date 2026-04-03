@@ -11,6 +11,8 @@ import {
   removeGroupMember,
   setGroupPhoto,
   listGroupMessages,
+  exportGroupChatHistory,
+  importGroupChatHistory,
   listUserGroups,
   markGroupThreadRead,
   sendGroupMessage as sendFirebaseGroupMessage,
@@ -25,7 +27,7 @@ import {
   subscribePinnedGroupMessages
 } from '../services/firebaseChat';
 import { motion } from 'framer-motion';
-import { BellOff, Camera, LogOut, MessageSquare, MoreVertical, Pin, PinOff, Search, Send, SmilePlus, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { Download, Upload, BellOff, Camera, LogOut, MessageSquare, MoreVertical, Pin, PinOff, Search, Send, SmilePlus, Trash2, UserPlus, Users, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AppMainHeader } from '@/components/AppMainHeader';
 import { cn } from '@/lib/utils';
@@ -51,6 +53,8 @@ export default function GroupChatPage() {
   const [messagesLoadError, setMessagesLoadError] = useState('');
   const [panelError, setPanelError] = useState('');
   const [panelSuccess, setPanelSuccess] = useState('');
+  const [chatTransferBusy, setChatTransferBusy] = useState(false);
+  const importGroupFileRef = useRef(null);
   const [groupsRefreshTick, setGroupsRefreshTick] = useState(0);
   const [membersRefreshTick, setMembersRefreshTick] = useState(0);
   const [messagesRefreshTick, setMessagesRefreshTick] = useState(0);
@@ -106,6 +110,67 @@ export default function GroupChatPage() {
     }
     return member.username || member.id;
   }, [user?.id, user?.username]);
+
+  const handleExportGroupChatHistory = async () => {
+    if (!user?.id || !groupId.trim()) return;
+    setPanelError('');
+    setPanelSuccess('');
+    setChatTransferBusy(true);
+    try {
+      const payload = await exportGroupChatHistory({
+        groupId: groupId.trim(),
+        limit: 150
+      });
+
+      const content = JSON.stringify(payload, null, 2);
+      const blob = new Blob([content], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+
+      const date = new Date().toISOString().slice(0, 10);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `group-${payload.groupId}-export-${date}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      setPanelSuccess('Group chat exported.');
+    } catch (err) {
+      setPanelError(err?.message || 'Group export failed.');
+    } finally {
+      setChatTransferBusy(false);
+    }
+  };
+
+  const handleImportGroupChatFile = async (file) => {
+    if (!user?.id || !groupId.trim()) return;
+    if (!file) return;
+    setPanelError('');
+    setPanelSuccess('');
+    setChatTransferBusy(true);
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+
+      if (!payload || payload.type !== 'group') {
+        setPanelError('Invalid file format. Expected a group chat export JSON.');
+        return;
+      }
+
+      await importGroupChatHistory({
+        groupId: groupId.trim(),
+        userId: user.id,
+        payload
+      });
+
+      setMessagesRefreshTick((v) => v + 1);
+      setPanelSuccess('Group chat imported.');
+    } catch (err) {
+      setPanelError(err?.message || 'Group import failed.');
+    } finally {
+      setChatTransferBusy(false);
+      if (importGroupFileRef.current) importGroupFileRef.current.value = '';
+    }
+  };
 
   useEffect(() => {
     if (!groupSearchOpen) return;
@@ -720,6 +785,35 @@ export default function GroupChatPage() {
                 >
                   <Search className="h-4 w-4" />
                 </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={!groupId.trim() || !user?.id || chatTransferBusy}
+                  onClick={handleExportGroupChatHistory}
+                  title="Export this group chat as JSON"
+                >
+                  <Download className="mr-1.5 h-4 w-4" />
+                  Export
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={!groupId.trim() || !user?.id || chatTransferBusy}
+                  onClick={() => importGroupFileRef.current?.click()}
+                  title="Import group chat JSON"
+                >
+                  <Upload className="mr-1.5 h-4 w-4" />
+                  Import
+                </Button>
+                <input
+                  ref={importGroupFileRef}
+                  type="file"
+                  accept="application/json"
+                  className="hidden"
+                  onChange={(e) => handleImportGroupChatFile(e.target.files?.[0])}
+                />
               <div ref={groupMenuRef} className="relative">
                 <Button
                   type="button"

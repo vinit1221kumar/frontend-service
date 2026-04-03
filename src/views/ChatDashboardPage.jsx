@@ -13,6 +13,8 @@ import {
   hideDirectMessageForMe,
   listDirectMessages,
   deleteRecentDirectChat,
+  exportDirectChatHistory,
+  importDirectChatHistory,
   markDirectThreadRead,
   markRecentDirectChatRead,
   searchUsersByUsername,
@@ -35,10 +37,12 @@ import {
   Loader2,
   Lock,
   Archive,
+  Download,
   MessageCircle,
   Mic,
   MicOff,
   Phone,
+  Upload,
   Pin,
   PinOff,
   MoreVertical,
@@ -64,6 +68,8 @@ export default function ChatDashboardPage() {
   const [input, setInput] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [chatTransferBusy, setChatTransferBusy] = useState(false);
+  const importChatFileRef = useRef(null);
   const [activeUserId, setActiveUserId] = useState('');
   const [peerUsername, setPeerUsername] = useState('');
   const [recentChats, setRecentChats] = useState([]);
@@ -555,6 +561,64 @@ export default function ChatDashboardPage() {
 
   const peerAvatarSeed = encodeURIComponent(peerUsername || activeUserId.trim() || 'user');
 
+  const handleExportChatHistory = async () => {
+    if (!user?.id || !activeUserId.trim()) return;
+    setActionError('');
+    setChatTransferBusy(true);
+    try {
+      const payload = await exportDirectChatHistory({
+        userId: user.id,
+        peerId: activeUserId.trim(),
+        limit: 100
+      });
+
+      const content = JSON.stringify(payload, null, 2);
+      const blob = new Blob([content], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+
+      const date = new Date().toISOString().slice(0, 10);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `dm-${payload.threadId}-export-${date}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setActionError(err?.message || 'Chat export failed.');
+    } finally {
+      setChatTransferBusy(false);
+    }
+  };
+
+  const handleImportChatFile = async (file) => {
+    if (!user?.id || !activeUserId.trim()) return;
+    if (!file) return;
+
+    setActionError('');
+    setChatTransferBusy(true);
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+
+      if (!payload || payload.type !== 'direct') {
+        setActionError('Invalid file format. Expected a direct chat export JSON.');
+        return;
+      }
+
+      await importDirectChatHistory({
+        userId: user.id,
+        peerId: activeUserId.trim(),
+        payload
+      });
+
+      setHistoryRefreshTick((v) => v + 1);
+    } catch (err) {
+      setActionError(err?.message || 'Chat import failed.');
+    } finally {
+      setChatTransferBusy(false);
+      if (importChatFileRef.current) importChatFileRef.current.value = '';
+    }
+  };
+
   return (
     <div className="app-shell flex h-[100dvh] min-h-0 flex-col overflow-hidden">
       <AppMainHeader />
@@ -914,6 +978,35 @@ export default function ChatDashboardPage() {
                         Video
                       </Link>
                     </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      disabled={chatTransferBusy}
+                      onClick={handleExportChatHistory}
+                      title="Export this direct chat as JSON"
+                    >
+                      <Download className="mr-1.5 h-4 w-4" />
+                      Export
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      disabled={chatTransferBusy}
+                      onClick={() => importChatFileRef.current?.click()}
+                      title="Import direct chat JSON"
+                    >
+                      <Upload className="mr-1.5 h-4 w-4" />
+                      Import
+                    </Button>
+                    <input
+                      ref={importChatFileRef}
+                      type="file"
+                      accept="application/json"
+                      className="hidden"
+                      onChange={(e) => handleImportChatFile(e.target.files?.[0])}
+                    />
                   </>
                 ) : (
                   <>
