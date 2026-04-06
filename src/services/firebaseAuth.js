@@ -10,6 +10,10 @@ import {
 import { get, ref, set, update } from 'firebase/database';
 import { createFirebaseConfigError, getFirebaseAuth, getRealtimeDb, isFirebaseConfigured } from './firebaseClient';
 
+function normalizeUsername(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
 function toProfile(authUser, profile = {}) {
   const username = profile.username || authUser.displayName || authUser.email?.split('@')[0] || 'User';
   return {
@@ -27,11 +31,24 @@ async function ensureUserProfile({ realtimeDb, user, fallbackEmail, fallbackUser
   const profileRef = ref(realtimeDb, `users/${user.uid}`);
   const profileSnap = await get(profileRef);
   if (profileSnap.exists()) {
-    return profileSnap.val();
+    const existing = profileSnap.val() || {};
+    const existingUsername = existing.username || user.displayName || user.email?.split('@')[0] || 'User';
+    const expectedLower = normalizeUsername(existingUsername);
+
+    // FIX: Backfill normalized username for user search (case-insensitive prefix search).
+    if (existing.usernameLower !== expectedLower) {
+      try {
+        await update(profileRef, { usernameLower: expectedLower });
+      } catch {
+        // Best-effort; don't block login if profile normalization fails.
+      }
+    }
+    return { ...existing, username: existingUsername, usernameLower: expectedLower };
   }
   const profile = {
     uid: user.uid,
     username: fallbackUsername || user.displayName || user.email?.split('@')[0] || 'User',
+    usernameLower: normalizeUsername(fallbackUsername || user.displayName || user.email?.split('@')[0] || 'User'),
     email: fallbackEmail || user.email || '',
     // FIX: store photoURL in the canonical profile location for consistent reads across app.
     photoURL: user.photoURL || '',

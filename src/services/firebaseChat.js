@@ -330,10 +330,10 @@ export async function searchUsersByUsername(term, excludeUserId) {
   if (!value) return [];
 
   // Use an ordered range query so we only read matching records, not the whole users node.
-  // Requires ".indexOn": ["username"] in Firebase rules (already set).
+  // Requires ".indexOn": ["usernameLower"] in Firebase rules.
   const usersQuery = query(
     ref(realtimeDb, 'users'),
-    orderByChild('username'),
+    orderByChild('usernameLower'),
     startAt(value),
     endAt(value + '\uf8ff'),
     limitToFirst(20)
