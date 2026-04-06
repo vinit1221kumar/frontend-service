@@ -326,33 +326,50 @@ export async function markGroupThreadRead({ groupId, userId, limit = 150 }) {
 
 export async function searchUsersByUsername(term, excludeUserId) {
   const realtimeDb = getRealtimeDb();
-  const value = term.trim().toLowerCase();
+  const raw = String(term || '').trim();
+  const value = raw.toLowerCase();
   if (!value) return [];
 
-  // Use an ordered range query so we only read matching records, not the whole users node.
-  // Requires ".indexOn": ["usernameLower"] in Firebase rules.
-  const usersQuery = query(
-    ref(realtimeDb, 'users'),
-    orderByChild('usernameLower'),
-    startAt(value),
-    endAt(value + '\uf8ff'),
-    limitToFirst(20)
-  );
+  const runQuery = async (field, queryValue) => {
+    const usersQuery = query(
+      ref(realtimeDb, 'users'),
+      orderByChild(field),
+      startAt(queryValue),
+      endAt(queryValue + '\uf8ff'),
+      limitToFirst(20)
+    );
+    const snap = await get(usersQuery);
+    if (!snap.exists()) return [];
+    const items = [];
+    snap.forEach((child) => {
+      const user = child.val();
+      if (user?.uid && user.uid !== excludeUserId) {
+        items.push({
+          id: user.uid,
+          username: user.username || user.email?.split('@')[0] || 'User'
+        });
+      }
+    });
+    return items;
+  };
 
-  const usersSnap = await get(usersQuery);
-  if (!usersSnap.exists()) return [];
+  // Prefer case-insensitive prefix search via usernameLower when available.
+  // If Firebase rules are still indexing "username" only, fall back gracefully.
+  try {
+    return await runQuery('usernameLower', value);
+  } catch {
+    const merged = new Map();
+    const byLower = await runQuery('username', value).catch(() => []);
+    byLower.forEach((u) => merged.set(u.id, u));
 
-  const results = [];
-  usersSnap.forEach((child) => {
-    const user = child.val();
-    if (user?.uid && user.uid !== excludeUserId) {
-      results.push({
-        id: user.uid,
-        username: user.username || user.email?.split('@')[0] || 'User'
-      });
+    // Optional second attempt with raw term (in case usernames were saved with uppercase prefixes)
+    if (raw && raw !== value) {
+      const byRaw = await runQuery('username', raw).catch(() => []);
+      byRaw.forEach((u) => merged.set(u.id, u));
     }
-  });
-  return results;
+
+    return Array.from(merged.values()).slice(0, 20);
+  }
 }
 
 export async function getUserProfileById(userId) {
